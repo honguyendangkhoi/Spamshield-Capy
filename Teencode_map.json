@@ -1,0 +1,84 @@
+{
+  "_comment": "Regex pattern -> replacement. Them/sua o day, pipeline tu dong cap nhat, khong can sua code.",
+
+  "phu_dinh_xac_nhan": {
+    "\\bko\\b":    "khong",
+    "\\bk\\b":     "khong",
+    "\\bkhg\\b":   "khong",
+    "\\bkp\\b":    "khong phai",
+    "\\bkd\\b":    "khong duoc",
+    "\\bdc\\b":    "duoc",
+    "\\bddc\\b":   "duoc",
+    "\\bok\\b":    "on",
+    "\\bokay\\b":  "on",
+    "\\bro\\b":    "roi",
+    "\\bro roi\\b": "roi"
+  },
+
+  "giao_tiep_pho_bien": {
+    "\\bmn\\b":     "moi nguoi",
+    "\\bbh\\b":     "bay gio",
+    "\\bbtw\\b":    "nhan tien",
+    "\\bntn\\b":    "nhu the nao",
+    "\\bmk\\b":     "minh",
+    "\\btui\\b":    "toi",
+    "\\bmoa\\b":    "toi",
+    "\\bck\\b":     "chong",
+    "\\bvk\\b":     "vo",
+    "\\bbn\\b":     "ban",
+    "\\bbff\\b":    "ban than",
+    "\\bnt\\b":     "nhu the",
+    "\\bvd\\b":     "vi du",
+    "\\bvv\\b":     "van van",
+    "\\bdk\\b":     "di kem",
+    "\\bth\\b":     "thi"
+  },
+
+  "cam_xuc_phan_ung": {
+    "\\bvl\\b":    "qua",
+    "\\bval\\b":   "qua",
+    "\\bhaiz\\b":  "tho dai",
+    "\\bhic\\b":   "buon",
+    "\\bhehe\\b":  "cuoi",
+    "\\bhaha\\b":  "cuoi",
+    "\\bokke\\b":  "on",
+    "\\bhmm\\b":   "suy nghi"
+  },
+
+  "spam_keywords": {
+    "\\bkm\\b":                              "khuyen mai",
+    "\\bkhuyen mai\\b":                      "khuyen mai",
+    "\\bck(?=\\s*%|\\s*phan tram)\\b":       "chiet khau",
+    "\\buu dai\\b":                          "uu dai",
+    "\\btang\\b":                            "tang",
+    "\\bfree\\b":                            "mien phi",
+    "\\bmien phi\\b":                        "mien phi",
+    "\\bnhanh tay\\b":                       "nhanh tay",
+    "\\blimited\\b":                         "gioi han",
+    "\\bflash sale\\b":                      "giam gia soc",
+    "\\bsale off\\b":                        "giam gia",
+    "\\bcombo\\b":                           "goi combo",
+    "\\bdeal\\b":                            "uu dai",
+    "\\bhot deal\\b":                        "uu dai hot",
+    "\\btrung thuong\\b":                    "trung thuong",
+    "\\bquay so\\b":                         "quay so trung thuong",
+    "\\brut tham\\b":                        "rut tham",
+    "\\bclickbait\\b":                       "noi qua su that",
+    "\\bcheck in\\b":                        "tham gia",
+    "\\bshare\\b":                           "chia se",
+    "\\blike\\b":                            "thich"
+  },
+
+  "so_don_vi": {
+    "\\b100k\\b":  "100 nghin",
+    "\\b200k\\b":  "200 nghin",
+    "\\b300k\\b":  "300 nghin",
+    "\\b500k\\b":  "500 nghin",
+    "\\b1tr\\b":   "1 trieu",
+    "\\b2tr\\b":   "2 trieu",
+    "\\b5tr\\b":   "5 trieu",
+    "\\b10tr\\b":  "10 trieu",
+    "\\b50tr\\b":  "50 trieu",
+    "\\b1ty\\b":   "1 ti"
+  }
+}
