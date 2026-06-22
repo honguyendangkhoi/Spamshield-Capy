@@ -20,20 +20,20 @@ dynamodb  = boto3.resource('dynamodb')
 sagemaker = boto3.client(
     'sagemaker-runtime',
     config=botocore.config.Config(
-        connect_timeout=5,       # timeout kết nối
-        read_timeout=30,         # timeout đọc response (cold start ~15-25s)
+        connect_timeout=5,
+        read_timeout=60,         # PATCH: 30 → 60s, SageMaker Serverless cold start ~15-25s
         retries={
-            'max_attempts': 2,   # thử lại 1 lần nếu fail
+            'max_attempts': 1,   # PATCH: 2 → 1, retry tốn tiền & thời gian vô ích khi endpoint chết
             'mode': 'standard'
         }
     )
 )
-s3        = boto3.client('s3')
+s3 = boto3.client('s3')
 
-TABLE_NAME          = 'spamshield-jobs'
-REP_TABLE_NAME      = 'spamshield-reputation'
-THREAT_INTEL_TABLE  = 'spamshield-threat-intel' 
-ENDPOINT_PRO        = 'spam-detection-endpoint-final'
+TABLE_NAME         = 'spamshield-jobs'
+REP_TABLE_NAME     = 'spamshield-reputation'
+THREAT_INTEL_TABLE = 'spamshield-threat-intel'
+ENDPOINT_PRO       = 'spam-detection-endpoint-final'
 
 S3_BUCKET     = 'spam-detection-doannhom'
 S3_MODEL_KEY  = 'standard/output/fasttext/model_standard.tar.gz'
@@ -62,17 +62,16 @@ def advanced_clean_text(text):
     text_cleaned = re.sub(r'[^\w\s]', ' ', text_cleaned)
     return re.sub(r'\s+', ' ', text_cleaned).strip()
 
+
 def _verify_external_intelligence(text):
     import urllib3
 
-    # Lấy API Key từ biến môi trường của AWS
     token = os.environ.get('GROQ_API_KEY')
     if not token:
         print("Lỗi hệ thống: Thiếu GROQ_API_KEY")
         return None
 
     endpoint = "https://api.groq.com/openai/v1/chat/completions"
-
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
@@ -98,7 +97,7 @@ def _verify_external_intelligence(text):
 
     try:
         http = urllib3.PoolManager(
-            timeout=urllib3.Timeout(connect=2.0, read=4.0)  # tách connect vs read
+            timeout=urllib3.Timeout(connect=2.0, read=4.0)
         )
         response = http.request(
             'POST', endpoint,
@@ -107,7 +106,7 @@ def _verify_external_intelligence(text):
                 'Authorization': f'Bearer {token}'
             },
             body=json.dumps(payload),
-            retries=urllib3.Retry(total=1, backoff_factor=0.5)  # retry 1 lần
+            retries=urllib3.Retry(total=1, backoff_factor=0.5)
         )
         if response.status == 200:
             res_data = json.loads(response.data.decode('utf-8'))
@@ -115,16 +114,15 @@ def _verify_external_intelligence(text):
             verdict  = re.sub(r'[^a-z]', '', verdict)
             if verdict in ['ham', 'spam', 'scam']:
                 return verdict
-
         elif response.status == 429:
-            print("Groq rate limit — bỏ qua vùng xám lần này")
-
+            print("Groq rate limit — bỏ qua")
     except urllib3.exceptions.TimeoutError:
-        print("Groq timeout — bỏ qua, không ảnh hưởng kết quả chính")
+        print("Groq timeout — bỏ qua")
     except Exception as e:
         print(f"Groq error: {str(e)}")
 
-    return None  # fallback: giữ nguyên kết quả ViBERTa
+    return None
+
 
 def analyze_header_routing(raw_headers):
     verdict = {"is_spoofed": False, "origin_ip": None, "reason": []}
@@ -136,10 +134,11 @@ def analyze_header_routing(raw_headers):
     received_chains = re.findall(r'Received:\s*from\s+.*?\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]', raw_headers)
     if received_chains:
         verdict["origin_ip"] = received_chains[-1]
-        if verdict["origin_ip"].startswith(("185.", "45.", "95.")): 
+        if verdict["origin_ip"].startswith(("185.", "45.", "95.")):
             verdict["is_spoofed"] = True
             verdict["reason"].append(f"🚨 IP gốc phát tán rủi ro cao: {verdict['origin_ip']}")
     return verdict
+
 
 def strict_whitelist_check(sender_domain, global_vip_list):
     if not sender_domain: return False
@@ -149,14 +148,15 @@ def strict_whitelist_check(sender_domain, global_vip_list):
         return True
     return False
 
+
 def check_email_security(domain):
     penalty = 0.0
     if not domain:
         return penalty
 
     resolver = dns.resolver.Resolver()
-    resolver.lifetime = 2.0   # tổng thời gian tối đa toàn bộ query
-    resolver.timeout  = 1.0   # timeout mỗi lần thử
+    resolver.lifetime = 2.0
+    resolver.timeout  = 1.0
 
     try:
         answers = resolver.resolve(f'_dmarc.{domain}', 'TXT')
@@ -167,7 +167,7 @@ def check_email_security(domain):
         if not has_dmarc:
             penalty += 0.20
     except Exception:
-        penalty += 0.20   # DNS fail = coi như thiếu DMARC
+        penalty += 0.20
 
     try:
         answers = resolver.resolve(domain, 'TXT')
@@ -182,6 +182,7 @@ def check_email_security(domain):
 
     return penalty
 
+
 def deep_inspect_magic_bytes(base64_files):
     reasons = []
     penalty = 0.0
@@ -189,22 +190,24 @@ def deep_inspect_magic_bytes(base64_files):
         try:
             file_bytes = base64.b64decode(b64_content)
             header = file_bytes[:4]
-            has_zip_footer = b'\x50\x4B\x05\x06' in file_bytes 
-            
+            has_zip_footer = b'\x50\x4B\x05\x06' in file_bytes
             if header.startswith(b'%PDF') and has_zip_footer:
                 penalty += 1.0
                 reasons.append(f"🚨 Malware Evasion: {filename} là tệp Polyglot (PDF chứa mã thực thi)")
             elif header.startswith(b'PK\x03\x04') and not filename.endswith('.zip'):
                 penalty += 0.5
                 reasons.append(f"⚠️ {filename}: Nén ZIP ẩn danh")
-        except: pass
+        except:
+            pass
     return penalty, reasons
+
 
 def extract_urls_from_text_and_qr(text, qr_base64_list):
     urls = re.findall(r'(https?://[^\s]+)', text)
     if qr_base64_list:
-        urls.append("http://malicious-qr-link.com") 
+        urls.append("http://malicious-qr-link.com")
     return urls
+
 
 def check_threat_intel(urls):
     try:
@@ -212,12 +215,16 @@ def check_threat_intel(urls):
         for u in urls:
             resp = table.get_item(Key={'entity': u})
             if 'Item' in resp: return True
-    except: pass
+    except:
+        pass
     return False
+
 
 def apply_penalty_with_context(scores, penalty_signals, text):
     """
-    Phân tích ngữ cảnh penalty thay vì cộng thẳng vào SCAM.
+    PATCH: Bỏ normalize-bằng-tổng vô điều kiện.
+    Chỉ re-normalize nếu tổng vượt 1.5 (quá lệch).
+    Giữ tỉ lệ tương đối của model, chỉ "đẩy" nhẹ theo signal.
     """
     SCAM_KEYWORDS = [
         'chuyển tiền', 'mật khẩu', 'otp', 'khóa tài khoản', 'xác minh',
@@ -231,39 +238,36 @@ def apply_penalty_with_context(scores, penalty_signals, text):
     ]
 
     text_lower = text.lower()
-    scam_ctx  = sum(1 for w in SCAM_KEYWORDS if w in text_lower)
-    spam_ctx  = sum(1 for w in SPAM_KEYWORDS if w in text_lower)
+    scam_ctx = sum(1 for w in SCAM_KEYWORDS if w in text_lower)
+    spam_ctx = sum(1 for w in SPAM_KEYWORDS if w in text_lower)
 
     for signal in penalty_signals:
         sig_type = signal.get('type')
         weight   = signal.get('weight', 0.0)
 
         if sig_type in ('header_spoofed', 'malware', 'threat_intel'):
-            # Hard evidence → luôn SCAM
             scores['scam'] = min(1.0, scores['scam'] + weight)
 
         elif sig_type in ('url_suspicious', 'domain_new', 'domain_impersonation'):
-            # Soft evidence → routing theo ngữ cảnh
             if scam_ctx >= spam_ctx:
                 scores['scam'] = min(1.0, scores['scam'] + weight * 0.6)
             else:
                 scores['spam'] = min(1.0, scores['spam'] + weight * 0.4)
 
         elif sig_type == 'dns_missing':
-            # DNS thiếu một mình không đủ để kết luận SCAM
-            scores['scam'] = min(1.0, scores['scam'] + weight * 0.2)
+            # PATCH: giảm weight dns_missing từ 0.2 → 0.1
+            # DNS thiếu phổ biến ở domain hợp lệ nhỏ, không nên kéo mạnh
+            scores['scam'] = min(1.0, scores['scam'] + weight * 0.1)
 
-    # Normalize để tổng không vượt 1.0
+    # PATCH: chỉ normalize khi tổng thực sự lệch > 1.5
     total = sum(scores.values())
-    if total > 0:
+    if total > 1.5:
         scores = {k: v / total for k, v in scores.items()}
 
     return scores
 
+
 def safe_whois_check(sender_domain, penalty_signals, highlights):
-    """
-    Chạy WHOIS trong thread riêng, hard-kill sau 3 giây.
-    """
     def _do_whois():
         w = whois.whois(sender_domain)
         if w.creation_date:
@@ -276,73 +280,73 @@ def safe_whois_check(sender_domain, penalty_signals, highlights):
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_do_whois)
-            age_days = future.result(timeout=3.0)  # hard kill sau 3s
+            age_days = future.result(timeout=3.0)
 
         if age_days is not None and age_days < 30:
             penalty_signals.append({'type': 'domain_new', 'weight': 0.5})
             highlights.append("🚨 Tên miền sơ sinh (< 30 ngày)")
 
     except concurrent.futures.TimeoutError:
-        print(f"WHOIS timeout: {sender_domain} — bỏ qua, tiếp tục xử lý")
+        print(f"WHOIS timeout: {sender_domain} — bỏ qua")
     except Exception as e:
         print(f"WHOIS lỗi: {str(e)} — bỏ qua")
+
 
 def save_to_reputation_cache(sender_domain, result):
     if not sender_domain:
         return
     try:
         dynamodb.Table(REP_TABLE_NAME).put_item(Item={
-            'domain'     : sender_domain,
-            'result'     : json.loads(json.dumps(result), parse_float=Decimal),
-            'expires_at' : int(time.time()) + (7 * 24 * 3600),
-            'saved_at'   : int(time.time()),
-            'label'      : result.get('prediction', 'unknown'),
+            'domain'    : sender_domain,
+            'result'    : json.loads(json.dumps(result), parse_float=Decimal),
+            'expires_at': int(time.time()) + (7 * 24 * 3600),
+            'saved_at'  : int(time.time()),
+            'label'     : result.get('prediction', 'unknown'),
         })
     except Exception as e:
         print(f"[RepCache] Lỗi lưu: {e}")
 
+
 def save_to_retrain_pool(text, viberta_label, viberta_scores,
                          correct_label, source, confidence):
-    # Chỉ lưu khi có giá trị học được — tránh lưu rác
     if viberta_label == correct_label and source != 'user_feedback':
         return
     try:
         dynamodb.Table('spamshield-retrain-pool').put_item(Item={
-            'timestamp'       : Decimal(str(time.time())),
-            'email_text'      : text[:2000],
-            'viberta_label'   : viberta_label,
-            'viberta_scores'  : json.loads(
-                                    json.dumps(viberta_scores),
-                                    parse_float=Decimal
-                                ),
-            'correct_label'   : correct_label,
-            'confidence'      : Decimal(str(round(confidence, 4))),
-            'source'          : source,
-            'status'          : 'PENDING_RETRAIN',
-            'expires_at'      : int(time.time()) + (30 * 24 * 3600),
+            'timestamp'      : Decimal(str(time.time())),
+            'email_text'     : text[:2000],
+            'viberta_label'  : viberta_label,
+            'viberta_scores' : json.loads(
+                                   json.dumps(viberta_scores),
+                                   parse_float=Decimal
+                               ),
+            'correct_label'  : correct_label,
+            'confidence'     : Decimal(str(round(confidence, 4))),
+            'source'         : source,
+            'status'         : 'PENDING_RETRAIN',
+            'expires_at'     : int(time.time()) + (30 * 24 * 3600),
         })
         print(f"[RetainPool] Saved: {viberta_label} → {correct_label} ({source})")
     except Exception as e:
         print(f"[RetainPool] Lỗi lưu: {e}")
 
+
 def get_viberta_verdict(scores):
     sorted_labels = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top_label, top_score   = sorted_labels[0]
-    sec_label, sec_score   = sorted_labels[1]
+    top_label, top_score = sorted_labels[0]
+    sec_label, sec_score = sorted_labels[1]
 
-    # Tự tin cao → trả ngay
     if top_score >= 0.75:
         return top_label, top_score, 'high_confidence'
 
-    # SPAM vs SCAM margin quá nhỏ → không tự quyết
     if {top_label, sec_label} == {'spam', 'scam'} and (top_score - sec_score) < 0.20:
         return None, top_score, 'spam_scam_ambiguous'
 
-    # Vùng xám chung
     if top_score < 0.55:
         return None, top_score, 'low_confidence'
 
     return top_label, top_score, 'medium_confidence'
+
 
 def resolve_ambiguous_label(text, viberta_label, viberta_scores, ambiguity_reason):
     groq_label = _verify_external_intelligence(text)
@@ -355,7 +359,7 @@ def resolve_ambiguous_label(text, viberta_label, viberta_scores, ambiguity_reaso
             viberta_scores = viberta_scores,
             correct_label  = groq_label,
             source         = 'groq_arbitration',
-            confidence     = viberta_scores.get(viberta_label, 0.0)
+            confidence     = viberta_scores.get(viberta_label or 'ham', 0.0)
         )
     else:
         final_label = viberta_label or 'ham'
@@ -365,13 +369,15 @@ def resolve_ambiguous_label(text, viberta_label, viberta_scores, ambiguity_reaso
             viberta_scores = viberta_scores,
             correct_label  = viberta_label,
             source         = f'groq_timeout_{ambiguity_reason}',
-            confidence     = viberta_scores.get(viberta_label, 0.0)
+            confidence     = viberta_scores.get(viberta_label or 'ham', 0.0)
         )
 
     return final_label
 
+
 # ==========================================
 # XỬ LÝ STANDARD MODE
+# PATCH: FastText bias → thêm confidence gate + Groq fallback
 # ==========================================
 def process_standard_mode(text, sender_domain):
     trigger_words = ['chuyển tiền', 'mật khẩu', 'đăng nhập', 'otp', 'khóa tài khoản']
@@ -406,10 +412,60 @@ def process_standard_mode(text, sender_domain):
         for l, p in zip(labels, probs)
     }
 
-    dns_penalty = check_email_security(sender_domain)
+    top_label = max(probs_dict, key=probs_dict.get)
+    top_score = probs_dict[top_label]
 
+    # PATCH: FastText model yếu (AI-gen data) → nếu không tự tin thì hỏi Groq
+    # Threshold 0.70 thay vì tin blindly — model bias SCAM khi gặp URL lạ
+    if top_score < 0.70:
+        print(f"[Standard] FastText low confidence ({top_score:.2f}) → Groq fallback")
+        groq_label = _verify_external_intelligence(text)
+        final_prediction = groq_label or top_label
+        result = {
+            'prediction'        : final_prediction,
+            'probability'       : top_score,
+            'details'           : probs_dict,
+            'mode'              : 'standard',
+            'dns_penalty_applied': False,
+            'note'              : f'fasttext_low_conf_{top_score:.2f}_groq_used'
+        }
+        # Lưu cache nếu Groq đồng ý (không phải fallback)
+        if groq_label:
+            try:
+                dynamodb.Table(REP_TABLE_NAME).put_item(Item={
+                    'domain'    : sender_domain,
+                    'result'    : json.loads(json.dumps(result), parse_float=Decimal),
+                    'expires_at': int(time.time()) + (7 * 24 * 3600)
+                })
+            except:
+                pass
+        return result
+
+    # PATCH: FastText tự tin nhưng predict SCAM mà không có trigger word → nghi ngờ bias
+    # Hạ xuống SPAM trước, để Groq xác nhận nếu có URL
+    if top_label == 'scam' and not has_trigger and top_score < 0.85:
+        print(f"[Standard] FastText SCAM without trigger words ({top_score:.2f}) → demote to spam, verify Groq")
+        groq_label = _verify_external_intelligence(text)
+        if groq_label and groq_label != 'scam':
+            final_prediction = groq_label
+        elif groq_label == 'scam':
+            final_prediction = 'scam'  # Groq xác nhận → tin
+        else:
+            final_prediction = 'spam'  # Groq timeout → an toàn hơn là spam
+        result = {
+            'prediction'        : final_prediction,
+            'probability'       : top_score,
+            'details'           : probs_dict,
+            'mode'              : 'standard',
+            'dns_penalty_applied': False,
+            'note'              : 'fasttext_scam_no_trigger_groq_verified'
+        }
+        return result
+
+    # FastText tự tin + hợp lý → chạy bình thường với DNS penalty
+    dns_penalty = check_email_security(sender_domain)
     scores = {
-        'ham':  probs_dict.get('ham',  0.0),
+        'ham' : probs_dict.get('ham',  0.0),
         'spam': probs_dict.get('spam', 0.0),
         'scam': probs_dict.get('scam', 0.0),
     }
@@ -419,29 +475,31 @@ def process_standard_mode(text, sender_domain):
 
     final_prediction = max(scores, key=scores.get)
     result = {
-        'prediction': final_prediction,
-        'probability': scores[final_prediction],
-        'details': scores,
-        'mode': 'standard',
+        'prediction'        : final_prediction,
+        'probability'       : scores[final_prediction],
+        'details'           : scores,
+        'mode'              : 'standard',
         'dns_penalty_applied': dns_penalty > 0
     }
 
     try:
         dynamodb.Table(REP_TABLE_NAME).put_item(Item={
-            'domain': sender_domain,
-            'result': json.loads(json.dumps(result), parse_float=Decimal),
+            'domain'    : sender_domain,
+            'result'    : json.loads(json.dumps(result), parse_float=Decimal),
             'expires_at': int(time.time()) + (7 * 24 * 3600)
         })
     except:
         pass
     return result
 
+
 # ==========================================
-# XỬ LÝ PRO MODE (CÓ KIẾN TRÚC VIBERTA)
+# XỬ LÝ PRO MODE
+# PATCH: ViBERTa fail → không lưu retrain rác, gọi Groq trực tiếp
 # ==========================================
 def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_images=[]):
-    highlights  = []
-    scores      = {'ham': 0.0, 'spam': 0.0, 'scam': 0.0}
+    highlights      = []
+    scores          = {'ham': 0.0, 'spam': 0.0, 'scam': 0.0}
     penalty_signals = []
 
     # --- Header forensics ---
@@ -457,14 +515,15 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             and check_email_security(sender_domain) == 0
             and not routing["is_spoofed"]):
         return {
-            'prediction': 'ham', 'probability': 1.0,
-            'details': {'ham': 1.0, 'spam': 0.0, 'scam': 0.0},
-            'mode': 'pro',
-            'highlights': ['🛡️ Tổ chức Quốc tế (Kiểm chứng Registered Domain & IP)'],
+            'prediction' : 'ham',
+            'probability': 1.0,
+            'details'    : {'ham': 1.0, 'spam': 0.0, 'scam': 0.0},
+            'mode'       : 'pro',
+            'highlights' : ['🛡️ Tổ chức Quốc tế (Kiểm chứng Registered Domain & IP)'],
             'dns_penalty_applied': False
         }
 
-    # --- Magic bytes (malware) ---
+    # --- Magic bytes ---
     file_pen, file_reasons = deep_inspect_magic_bytes(attachments)
     if file_pen > 0:
         penalty_signals.append({'type': 'malware', 'weight': file_pen})
@@ -476,7 +535,9 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         penalty_signals.append({'type': 'threat_intel', 'weight': 1.0})
         highlights.append("💀 Phát hiện URL nằm trong Sổ đen tình báo mạng toàn cầu (Abuse.ch)")
 
-    # --- ViBERTa inference với fallback ---
+    # --- ViBERTa inference ---
+    viberta_failed = False  # PATCH: flag để biết ViBERTa có chạy thật không
+
     try:
         payload  = json.dumps({'inputs': advanced_clean_text(text)})
         response = sagemaker.invoke_endpoint(
@@ -493,19 +554,46 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
                 if isinstance(item, dict):
                     label = str(item.get('label', '')).lower()
                     score = float(item.get('score', 0.0))
-                    if label in ['scam', '2', 'label_2']:   scores['scam'] = score
-                    elif label in ['spam', '1', 'label_1']: scores['spam'] = score
-                    elif label in ['ham',  '0', 'label_0']: scores['ham']  = score
+                    if label in ['scam', '2', 'label_2']:    scores['scam'] = score
+                    elif label in ['spam', '1', 'label_1']:  scores['spam'] = score
+                    elif label in ['ham',  '0', 'label_0']:  scores['ham']  = score
         if sum(scores.values()) == 0:
             scores['ham'] = 1.0
 
     except sagemaker.exceptions.ModelError as e:
         print(f"SageMaker ModelError: {e}")
-        scores = {'ham': 0.34, 'spam': 0.33, 'scam': 0.33}  
+        viberta_failed = True
 
     except Exception as e:
-        print(f"SageMaker timeout/error: {e}")
-        scores = {'ham': 0.34, 'spam': 0.33, 'scam': 0.33} 
+        # PATCH: log rõ loại lỗi để dễ debug trên CloudWatch
+        err_type = type(e).__name__
+        print(f"SageMaker {err_type}: {e}")
+        viberta_failed = True
+
+    # PATCH: ViBERTa chết → gọi Groq trực tiếp, KHÔNG dùng 0.34/0.33/0.33 vô nghĩa
+    # Không lưu vào retrain pool khi ViBERTa fail — tránh poison data
+    if viberta_failed:
+        print("[Pro] ViBERTa unavailable → Groq direct arbitration")
+        groq_label = _verify_external_intelligence(advanced_clean_text(text))
+        final_prediction = groq_label or 'ham'
+        # Vẫn áp dụng hard evidence nếu có (malware, header spoofed)
+        hard_signals = [s for s in penalty_signals
+                        if s['type'] in ('header_spoofed', 'malware', 'threat_intel')]
+        if hard_signals:
+            final_prediction = 'scam'
+            highlights.append("🚨 Hard evidence ghi đè — ViBERTa offline")
+        result = {
+            'prediction' : final_prediction,
+            'probability': 0.65,
+            'details'    : {'ham': 0.0, 'spam': 0.0, 'scam': 0.0,
+                            final_prediction: 0.65},
+            'mode'       : 'pro',
+            'highlights' : highlights + ['⚠️ ViBERTa không phản hồi — dùng Groq arbitration'],
+            'dns_penalty_applied': False,
+            'viberta_status': 'failed'
+        }
+        save_to_reputation_cache(sender_domain, result)
+        return result
 
     # --- DNS penalty ---
     dns_penalty = check_email_security(sender_domain)
@@ -525,10 +613,10 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             highlights.append(f"🚨 Tên miền nhái thương hiệu: {v}")
             break
 
-    # --- Áp dụng penalty thông minh theo ngữ cảnh ---
+    # --- Áp dụng penalty thông minh ---
     scores = apply_penalty_with_context(scores, penalty_signals, text)
 
-    # --- Quyết định Nhãn Cuối cùng ---
+    # --- Quyết định nhãn cuối ---
     verdict, confidence, reason = get_viberta_verdict(scores)
 
     if verdict is None:
@@ -552,7 +640,7 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             )
 
     scores[final_prediction] = max(scores[final_prediction], confidence or 0.6)
-    
+
     if (scores.get('scam', 0) > 0.6
             and not any(s['type'] in ('header_spoofed', 'malware', 'threat_intel')
                         for s in penalty_signals)):
@@ -570,37 +658,40 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
     save_to_reputation_cache(sender_domain, result)
     return result
 
+
 # ==========================================
 # ĐIỀU PHỐI CHÍNH (HANDLER)
 # ==========================================
 def lambda_handler(event, context):
     for record in event['Records']:
-        job = json.loads(record['body'])
+        job   = json.loads(record['body'])
         table = dynamodb.Table(TABLE_NAME)
         try:
             mode = job.get('mode', 'standard')
-            sd = job.get('sender_domain', '')
+            sd   = job.get('sender_domain', '')
             hdrs = job.get('raw_headers', '')
             atts = job.get('attachments_b64', {})
-            qrs = job.get('qr_images_b64', [])
-            
+            qrs  = job.get('qr_images_b64', [])
+
             if mode == 'standard':
                 result = process_standard_mode(job['text'], sd)
             else:
                 result = process_pro_mode(job['text'], sd, hdrs, atts, qrs)
-                
-            # Cập nhật kết quả cuối cùng (kể cả sau khi Groq làm trọng tài) ra DB để Extension kéo về
+
             table.update_item(
-                Key={'job_id': job['job_id']}, 
-                UpdateExpression='SET #s = :s, #r = :r', 
-                ExpressionAttributeNames={'#s': 'status', '#r': 'result'}, 
-                ExpressionAttributeValues={':s': 'done', ':r': json.loads(json.dumps(result), parse_float=Decimal)}
+                Key={'job_id': job['job_id']},
+                UpdateExpression='SET #s = :s, #r = :r',
+                ExpressionAttributeNames={'#s': 'status', '#r': 'result'},
+                ExpressionAttributeValues={
+                    ':s': 'done',
+                    ':r': json.loads(json.dumps(result), parse_float=Decimal)
+                }
             )
-                
+
         except Exception as e:
             table.update_item(
-                Key={'job_id': job['job_id']}, 
-                UpdateExpression='SET #s = :s, error_msg = :e', 
-                ExpressionAttributeNames={'#s': 'status'}, 
+                Key={'job_id': job['job_id']},
+                UpdateExpression='SET #s = :s, error_msg = :e',
+                ExpressionAttributeNames={'#s': 'status'},
                 ExpressionAttributeValues={':s': 'failed', ':e': str(e)}
             )
