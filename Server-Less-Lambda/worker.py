@@ -21,11 +21,8 @@ sagemaker = boto3.client(
     'sagemaker-runtime',
     config=botocore.config.Config(
         connect_timeout=5,
-        read_timeout=60,         # PATCH: 30 → 60s, SageMaker Serverless cold start ~15-25s
-        retries={
-            'max_attempts': 1,   # PATCH: 2 → 1, retry tốn tiền & thời gian vô ích khi endpoint chết
-            'mode': 'standard'
-        }
+        read_timeout=60,
+        retries={'max_attempts': 1, 'mode': 'standard'}
     )
 )
 s3 = boto3.client('s3')
@@ -42,6 +39,7 @@ TMP_MODEL_DIR = '/tmp/fasttext'
 TMP_MODEL_BIN = '/tmp/fasttext/model.bin'
 
 _fasttext_model = None
+
 
 # ==========================================
 # CÁC HÀM TIỀN XỬ LÝ VÀ BẢO MẬT
@@ -96,9 +94,7 @@ def _verify_external_intelligence(text):
     }
 
     try:
-        http = urllib3.PoolManager(
-            timeout=urllib3.Timeout(connect=2.0, read=4.0)
-        )
+        http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=2.0, read=4.0))
         response = http.request(
             'POST', endpoint,
             headers={
@@ -221,11 +217,6 @@ def check_threat_intel(urls):
 
 
 def apply_penalty_with_context(scores, penalty_signals, text):
-    """
-    PATCH: Bỏ normalize-bằng-tổng vô điều kiện.
-    Chỉ re-normalize nếu tổng vượt 1.5 (quá lệch).
-    Giữ tỉ lệ tương đối của model, chỉ "đẩy" nhẹ theo signal.
-    """
     SCAM_KEYWORDS = [
         'chuyển tiền', 'mật khẩu', 'otp', 'khóa tài khoản', 'xác minh',
         'khẩn cấp', 'ngay lập tức', 'cảnh báo', 'bị khóa', 'đăng nhập',
@@ -247,19 +238,14 @@ def apply_penalty_with_context(scores, penalty_signals, text):
 
         if sig_type in ('header_spoofed', 'malware', 'threat_intel'):
             scores['scam'] = min(1.0, scores['scam'] + weight)
-
         elif sig_type in ('url_suspicious', 'domain_new', 'domain_impersonation'):
             if scam_ctx >= spam_ctx:
                 scores['scam'] = min(1.0, scores['scam'] + weight * 0.6)
             else:
                 scores['spam'] = min(1.0, scores['spam'] + weight * 0.4)
-
         elif sig_type == 'dns_missing':
-            # PATCH: giảm weight dns_missing từ 0.2 → 0.1
-            # DNS thiếu phổ biến ở domain hợp lệ nhỏ, không nên kéo mạnh
             scores['scam'] = min(1.0, scores['scam'] + weight * 0.1)
 
-    # PATCH: chỉ normalize khi tổng thực sự lệch > 1.5
     total = sum(scores.values())
     if total > 1.5:
         scores = {k: v / total for k, v in scores.items()}
@@ -376,8 +362,131 @@ def resolve_ambiguous_label(text, viberta_label, viberta_scores, ambiguity_reaso
 
 
 # ==========================================
-# XỬ LÝ STANDARD MODE
-# PATCH: FastText bias → thêm confidence gate + Groq fallback
+# HELPER: Tạo highlights giải thích lý do
+# ==========================================
+def build_highlights_from_scores(scores, prediction, dns_penalty_applied, mode='standard'):
+    """
+    Sinh danh sách lý do dễ hiểu từ scores để hiển thị trên UI.
+    Áp dụng cho cả standard lẫn pro mode (pro mode sẽ merge thêm highlights riêng).
+    """
+    highlights = []
+    ham_pct  = scores.get('ham',  0.0) * 100
+    spam_pct = scores.get('spam', 0.0) * 100
+    scam_pct = scores.get('scam', 0.0) * 100
+
+    if prediction == 'ham':
+        highlights.append(f"✅ Nội dung an toàn (HAM {ham_pct:.0f}%)")
+        if spam_pct > 10:
+            highlights.append(f"⚠️ Có một số yếu tố quảng cáo nhỏ (SPAM {spam_pct:.0f}%)")
+        if dns_penalty_applied:
+            highlights.append("ℹ️ Domain thiếu DMARC/SPF nhưng nội dung vẫn an toàn")
+
+    elif prediction == 'spam':
+        highlights.append(f"🗑️ Nội dung mang tính quảng cáo/tiếp thị (SPAM {spam_pct:.0f}%)")
+        if ham_pct > 20:
+            highlights.append(f"ℹ️ Một phần nội dung trông hợp lệ (HAM {ham_pct:.0f}%)")
+        if scam_pct > 15:
+            highlights.append(f"⚠️ Có dấu hiệu thao túng tâm lý nhẹ (SCAM {scam_pct:.0f}%)")
+        if dns_penalty_applied:
+            highlights.append("⚠️ Domain thiếu bảo mật DMARC/SPF")
+
+    elif prediction == 'scam':
+        highlights.append(f"🚫 Phát hiện hành vi lừa đảo/thao túng tâm lý (SCAM {scam_pct:.0f}%)")
+        if spam_pct > 15:
+            highlights.append(f"⚠️ Kết hợp với yếu tố quảng cáo (SPAM {spam_pct:.0f}%)")
+        if dns_penalty_applied:
+            highlights.append("🚨 Domain thiếu bảo mật DMARC/SPF — dấu hiệu giả mạo")
+
+    return highlights
+
+
+# ==========================================
+# FIX: Chuẩn hóa scores từ FastText
+# FastText predict() trả probs không nhất thiết sum=1 với k=3
+# ==========================================
+def normalize_fasttext_scores(labels, probs):
+    """
+    Đảm bảo luôn có đủ 3 key: ham, spam, scam.
+    Tránh NaN khi một label bị thiếu.
+    """
+    raw = {}
+    for l, p in zip(labels, probs):
+        key = l.replace('__label__', '').lower().strip()
+        raw[key] = float(p) if (p == p) else 0.0  # NaN guard: p == p là False khi NaN
+
+    # Đảm bảo đủ 3 key, điền 0.0 nếu thiếu
+    scores = {
+        'ham' : raw.get('ham',  0.0),
+        'spam': raw.get('spam', 0.0),
+        'scam': raw.get('scam', 0.0),
+    }
+
+    # Normalize về [0,1] nếu tổng > 0
+    total = sum(scores.values())
+    if total > 0:
+        scores = {k: v / total for k, v in scores.items()}
+    else:
+        # Fallback nếu tất cả bằng 0 — coi là ham
+        scores = {'ham': 1.0, 'spam': 0.0, 'scam': 0.0}
+
+    return scores
+
+
+# ==========================================
+# FIX: Chuẩn hóa scores từ ViBERTa/SageMaker
+# Tránh trường hợp 1 nhãn chiếm 100% do softmax collapse
+# ==========================================
+def normalize_viberta_scores(raw_scores):
+    """
+    Áp dụng temperature scaling nhẹ (T=1.5) để trải đều scores
+    khi model bị overconfident (một nhãn gần 1.0).
+    Giới hạn nhãn dự đoán spam không vượt quá 0.55 (tránh 100%).
+    """
+    import math
+
+    scores = {
+        'ham' : float(raw_scores.get('ham',  0.0)),
+        'spam': float(raw_scores.get('spam', 0.0)),
+        'scam': float(raw_scores.get('scam', 0.0)),
+    }
+
+    # NaN guard
+    scores = {k: (v if v == v else 0.0) for k, v in scores.items()}
+
+    top_label = max(scores, key=scores.get)
+    top_score = scores[top_label]
+
+    # Nếu model overconfident (>= 0.90) → apply temperature scaling
+    if top_score >= 0.90:
+        T = 2.0  # Temperature: càng cao càng trải đều
+        # Tính logits giả định (inverse softmax đơn giản)
+        epsilon = 1e-9
+        logits = {k: math.log(max(v, epsilon)) for k, v in scores.items()}
+        # Scale down bằng temperature
+        scaled = {k: math.exp(v / T) for k, v in logits.items()}
+        total  = sum(scaled.values())
+        scores = {k: v / total for k, v in scaled.items()}
+        print(f"[ViBERTa] Overconfident ({top_score:.2f}) → temperature scaled")
+
+    # Hard cap: SPAM không được vượt 0.55 trừ khi SCAM cũng thấp
+    # (Tránh spam=1.0 khi scam gần bằng 0)
+    if scores['spam'] > 0.55 and scores['scam'] < 0.20:
+        excess = scores['spam'] - 0.50
+        scores['spam'] -= excess
+        scores['ham']  += excess * 0.7
+        scores['scam'] += excess * 0.3
+        print(f"[ViBERTa] SPAM hard-cap applied")
+
+    # Re-normalize sau khi cap
+    total = sum(scores.values())
+    if total > 0:
+        scores = {k: v / total for k, v in scores.items()}
+
+    return scores
+
+
+# ==========================================
+# XỬ LÝ STANDARD MODE — ĐÃ FIX
 # ==========================================
 def process_standard_mode(text, sender_domain):
     trigger_words = ['chuyển tiền', 'mật khẩu', 'đăng nhập', 'otp', 'khóa tài khoản']
@@ -385,9 +494,7 @@ def process_standard_mode(text, sender_domain):
 
     if not has_trigger:
         try:
-            resp = dynamodb.Table(REP_TABLE_NAME).get_item(
-                Key={'domain': sender_domain}
-            )
+            resp = dynamodb.Table(REP_TABLE_NAME).get_item(Key={'domain': sender_domain})
             if ('Item' in resp
                     and resp['Item'].get('expires_at', 0) > int(time.time())):
                 res = resp['Item']['result']
@@ -407,29 +514,40 @@ def process_standard_mode(text, sender_domain):
         _fasttext_model = fasttext.load_model(TMP_MODEL_BIN)
 
     labels, probs = _fasttext_model.predict(advanced_clean_text(text), k=3)
-    probs_dict = {
-        l.replace('__label__', ''): float(p)
-        for l, p in zip(labels, probs)
-    }
 
-    top_label = max(probs_dict, key=probs_dict.get)
-    top_score = probs_dict[top_label]
+    # FIX: Dùng normalize_fasttext_scores thay vì dict comprehension trực tiếp
+    # Tránh NaN khi label bị thiếu hoặc prob = NaN
+    scores = normalize_fasttext_scores(labels, probs)
 
-    # PATCH: FastText model yếu (AI-gen data) → nếu không tự tin thì hỏi Groq
-    # Threshold 0.70 thay vì tin blindly — model bias SCAM khi gặp URL lạ
+    top_label = max(scores, key=scores.get)
+    top_score = scores[top_label]
+
+    dns_penalty_applied = False
+
+    # FastText low confidence → Groq fallback
     if top_score < 0.70:
         print(f"[Standard] FastText low confidence ({top_score:.2f}) → Groq fallback")
         groq_label = _verify_external_intelligence(text)
         final_prediction = groq_label or top_label
+
+        # Nếu Groq đổi nhãn, điều chỉnh scores cho consistent
+        if groq_label and groq_label != top_label:
+            scores[groq_label] = max(scores[groq_label], 0.55)
+            total = sum(scores.values())
+            scores = {k: v / total for k, v in scores.items()}
+
+        highlights = build_highlights_from_scores(scores, final_prediction, False, 'standard')
+        highlights.append(f"ℹ️ FastText độ tự tin thấp ({top_score*100:.0f}%) — xác minh bởi Groq AI")
+
         result = {
-            'prediction'        : final_prediction,
-            'probability'       : top_score,
-            'details'           : probs_dict,
-            'mode'              : 'standard',
+            'prediction'         : final_prediction,
+            'probability'        : scores[final_prediction],
+            'details'            : scores,
+            'mode'               : 'standard',
             'dns_penalty_applied': False,
-            'note'              : f'fasttext_low_conf_{top_score:.2f}_groq_used'
+            'highlights'         : highlights,
+            'note'               : f'fasttext_low_conf_{top_score:.2f}_groq_used'
         }
-        # Lưu cache nếu Groq đồng ý (không phải fallback)
         if groq_label:
             try:
                 dynamodb.Table(REP_TABLE_NAME).put_item(Item={
@@ -441,45 +559,61 @@ def process_standard_mode(text, sender_domain):
                 pass
         return result
 
-    # PATCH: FastText tự tin nhưng predict SCAM mà không có trigger word → nghi ngờ bias
-    # Hạ xuống SPAM trước, để Groq xác nhận nếu có URL
+    # FastText SCAM không có trigger word → hạ xuống SPAM, verify Groq
     if top_label == 'scam' and not has_trigger and top_score < 0.85:
         print(f"[Standard] FastText SCAM without trigger words ({top_score:.2f}) → demote to spam, verify Groq")
         groq_label = _verify_external_intelligence(text)
         if groq_label and groq_label != 'scam':
             final_prediction = groq_label
         elif groq_label == 'scam':
-            final_prediction = 'scam'  # Groq xác nhận → tin
+            final_prediction = 'scam'
         else:
-            final_prediction = 'spam'  # Groq timeout → an toàn hơn là spam
+            final_prediction = 'spam'
+
+        # Điều chỉnh scores theo quyết định cuối
+        if final_prediction != top_label:
+            scores[final_prediction] = max(scores[final_prediction], 0.50)
+            total = sum(scores.values())
+            scores = {k: v / total for k, v in scores.items()}
+
+        highlights = build_highlights_from_scores(scores, final_prediction, False, 'standard')
+        highlights.append("ℹ️ Groq AI xác minh nhãn cuối cùng")
+
         result = {
-            'prediction'        : final_prediction,
-            'probability'       : top_score,
-            'details'           : probs_dict,
-            'mode'              : 'standard',
+            'prediction'         : final_prediction,
+            'probability'        : scores[final_prediction],
+            'details'            : scores,
+            'mode'               : 'standard',
             'dns_penalty_applied': False,
-            'note'              : 'fasttext_scam_no_trigger_groq_verified'
+            'highlights'         : highlights,
+            'note'               : 'fasttext_scam_no_trigger_groq_verified'
         }
         return result
 
-    # FastText tự tin + hợp lý → chạy bình thường với DNS penalty
+    # FastText tự tin + hợp lý → DNS penalty
     dns_penalty = check_email_security(sender_domain)
-    scores = {
-        'ham' : probs_dict.get('ham',  0.0),
-        'spam': probs_dict.get('spam', 0.0),
-        'scam': probs_dict.get('scam', 0.0),
-    }
     if dns_penalty > 0:
+        dns_penalty_applied = True
         penalty_signals = [{'type': 'dns_missing', 'weight': dns_penalty}]
         scores = apply_penalty_with_context(scores, penalty_signals, text)
 
     final_prediction = max(scores, key=scores.get)
+
+    # FIX: Đảm bảo probability không phải NaN
+    prob = scores.get(final_prediction, 0.0)
+    if prob != prob:  # NaN check
+        prob = 0.5
+
+    # FIX: Thêm highlights cho standard mode
+    highlights = build_highlights_from_scores(scores, final_prediction, dns_penalty_applied, 'standard')
+
     result = {
-        'prediction'        : final_prediction,
-        'probability'       : scores[final_prediction],
-        'details'           : scores,
-        'mode'              : 'standard',
-        'dns_penalty_applied': dns_penalty > 0
+        'prediction'         : final_prediction,
+        'probability'        : prob,
+        'details'            : scores,
+        'mode'               : 'standard',
+        'dns_penalty_applied': dns_penalty_applied,
+        'highlights'         : highlights,
     }
 
     try:
@@ -494,8 +628,7 @@ def process_standard_mode(text, sender_domain):
 
 
 # ==========================================
-# XỬ LÝ PRO MODE
-# PATCH: ViBERTa fail → không lưu retrain rác, gọi Groq trực tiếp
+# XỬ LÝ PRO MODE — ĐÃ FIX
 # ==========================================
 def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_images=[]):
     highlights      = []
@@ -536,7 +669,7 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         highlights.append("💀 Phát hiện URL nằm trong Sổ đen tình báo mạng toàn cầu (Abuse.ch)")
 
     # --- ViBERTa inference ---
-    viberta_failed = False  # PATCH: flag để biết ViBERTa có chạy thật không
+    viberta_failed = False
 
     try:
         payload  = json.dumps({'inputs': advanced_clean_text(text)})
@@ -546,6 +679,8 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             Body=payload
         )
         raw_output = json.loads(response['Body'].read().decode('utf-8'))
+
+        raw_scores = {'ham': 0.0, 'spam': 0.0, 'scam': 0.0}
         if isinstance(raw_output, list):
             items = (raw_output[0]
                      if (len(raw_output) > 0 and isinstance(raw_output[0], list))
@@ -554,50 +689,57 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
                 if isinstance(item, dict):
                     label = str(item.get('label', '')).lower()
                     score = float(item.get('score', 0.0))
-                    if label in ['scam', '2', 'label_2']:    scores['scam'] = score
-                    elif label in ['spam', '1', 'label_1']:  scores['spam'] = score
-                    elif label in ['ham',  '0', 'label_0']:  scores['ham']  = score
-        if sum(scores.values()) == 0:
-            scores['ham'] = 1.0
+                    if label in ['scam', '2', 'label_2']:    raw_scores['scam'] = score
+                    elif label in ['spam', '1', 'label_1']:  raw_scores['spam'] = score
+                    elif label in ['ham',  '0', 'label_0']:  raw_scores['ham']  = score
+
+        if sum(raw_scores.values()) == 0:
+            raw_scores['ham'] = 1.0
+
+        # FIX: Normalize ViBERTa scores — tránh 100% SPAM
+        scores = normalize_viberta_scores(raw_scores)
 
     except sagemaker.exceptions.ModelError as e:
         print(f"SageMaker ModelError: {e}")
         viberta_failed = True
-
     except Exception as e:
-        # PATCH: log rõ loại lỗi để dễ debug trên CloudWatch
         err_type = type(e).__name__
         print(f"SageMaker {err_type}: {e}")
         viberta_failed = True
 
-    # PATCH: ViBERTa chết → gọi Groq trực tiếp, KHÔNG dùng 0.34/0.33/0.33 vô nghĩa
-    # Không lưu vào retrain pool khi ViBERTa fail — tránh poison data
+    # ViBERTa chết → Groq direct
     if viberta_failed:
         print("[Pro] ViBERTa unavailable → Groq direct arbitration")
         groq_label = _verify_external_intelligence(advanced_clean_text(text))
         final_prediction = groq_label or 'ham'
-        # Vẫn áp dụng hard evidence nếu có (malware, header spoofed)
         hard_signals = [s for s in penalty_signals
                         if s['type'] in ('header_spoofed', 'malware', 'threat_intel')]
         if hard_signals:
             final_prediction = 'scam'
             highlights.append("🚨 Hard evidence ghi đè — ViBERTa offline")
+
+        fallback_scores = {'ham': 0.0, 'spam': 0.0, 'scam': 0.0}
+        fallback_scores[final_prediction] = 0.65
+
+        highlights.append("⚠️ ViBERTa không phản hồi — dùng Groq arbitration")
+        highlights.extend(build_highlights_from_scores(fallback_scores, final_prediction, False, 'pro'))
+
         result = {
-            'prediction' : final_prediction,
-            'probability': 0.65,
-            'details'    : {'ham': 0.0, 'spam': 0.0, 'scam': 0.0,
-                            final_prediction: 0.65},
-            'mode'       : 'pro',
-            'highlights' : highlights + ['⚠️ ViBERTa không phản hồi — dùng Groq arbitration'],
+            'prediction'     : final_prediction,
+            'probability'    : 0.65,
+            'details'        : fallback_scores,
+            'mode'           : 'pro',
+            'highlights'     : highlights,
             'dns_penalty_applied': False,
-            'viberta_status': 'failed'
+            'viberta_status' : 'failed'
         }
         save_to_reputation_cache(sender_domain, result)
         return result
 
     # --- DNS penalty ---
     dns_penalty = check_email_security(sender_domain)
-    if dns_penalty > 0:
+    dns_penalty_applied = dns_penalty > 0
+    if dns_penalty_applied:
         penalty_signals.append({'type': 'dns_missing', 'weight': dns_penalty})
         highlights.append("🚨 Thiếu hệ thống bảo mật DMARC/SPF")
 
@@ -613,7 +755,7 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             highlights.append(f"🚨 Tên miền nhái thương hiệu: {v}")
             break
 
-    # --- Áp dụng penalty thông minh ---
+    # --- Áp dụng penalty ---
     scores = apply_penalty_with_context(scores, penalty_signals, text)
 
     # --- Quyết định nhãn cuối ---
@@ -639,20 +781,31 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
                 confidence     = confidence
             )
 
-    scores[final_prediction] = max(scores[final_prediction], confidence or 0.6)
+    # FIX: KHÔNG override scores[final_prediction] lên mức cao bất hợp lý
+    # Chỉ đảm bảo probability phản ánh đúng scores sau penalty
+    final_prob = scores.get(final_prediction, 0.0)
+    if final_prob != final_prob:  # NaN guard
+        final_prob = 0.5
 
-    if (scores.get('scam', 0) > 0.6
-            and not any(s['type'] in ('header_spoofed', 'malware', 'threat_intel')
-                        for s in penalty_signals)):
+    if scores.get('scam', 0) > 0.6 and not any(
+        s['type'] in ('header_spoofed', 'malware', 'threat_intel') for s in penalty_signals
+    ):
         highlights.append("🤖 AI phát hiện hành vi thao túng tâm lý ngầm")
 
+    # FIX: Merge highlights từ scores vào highlights chuyên sâu
+    score_highlights = build_highlights_from_scores(scores, final_prediction, dns_penalty_applied, 'pro')
+    # Thêm score highlights ở đầu (nếu chưa có nội dung tương tự)
+    for sh in score_highlights:
+        if not any(sh[:10] in h for h in highlights):
+            highlights.insert(0, sh)
+
     result = {
-        'prediction' : final_prediction,
-        'probability': scores[final_prediction],
-        'details'    : scores,
-        'mode'       : 'pro',
-        'highlights' : highlights,
-        'dns_penalty_applied': dns_penalty > 0
+        'prediction'         : final_prediction,
+        'probability'        : final_prob,
+        'details'            : scores,
+        'mode'               : 'pro',
+        'highlights'         : highlights,
+        'dns_penalty_applied': dns_penalty_applied
     }
 
     save_to_reputation_cache(sender_domain, result)
