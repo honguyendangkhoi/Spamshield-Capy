@@ -1,68 +1,63 @@
-# 🛡️ SpamShield: Next-Gen Serverless Secure Email Gateway
+# 🛡️ SpamShield AI — Next-Gen Secure Email Gateway (SEG)
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![Architecture](https://img.shields.io/badge/architecture-Serverless-orange.svg)
-![Security](https://img.shields.io/badge/security-Zero--Gap-success.svg)
-![Cost](https://img.shields.io/badge/FinOps-Optimized-brightgreen.svg)
+![AWS](https://img.shields.io/badge/AWS-Serverless-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.9-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Llama 3.1](https://img.shields.io/badge/AI-Llama_3.1-0466C8?style=for-the-badge&logo=meta&logoColor=white)
+![Status](https://img.shields.io/badge/Status-Code_Freeze-28A745?style=for-the-badge)
 
-**SpamShield** is an enterprise-grade, serverless Secure Email Gateway (SEG) built as a Chrome Extension. It goes beyond simple text classification by utilizing a **7-Layer Defense-in-Depth** architecture and Advanced NLP (ViBert) to protect users from sophisticated phishing, spoofing, and malware attacks in real-time.
-
----
-
-## ✨ Core Features
-
-*   **🚦 3-Tier Classification System:** Accurately categorizes emails into **HAM** (Safe), **SPAM** (Junk/Promo), and **SCAM** (Phishing/Malicious) with detailed probability scores.
-*   **🧠 Hybrid AI Engine:** 
-    *   **Standard Mode:** Uses FastText for ultra-fast, lightweight daily spam filtering.
-    *   **Pro Mode:** Utilizes a fine-tuned **ViBert** (Vietnamese RoBERTa) model hosted on AWS SageMaker for deep semantic analysis of manipulative text.
-*   **💸 FinOps & Scale-to-Zero:** Designed with strict Cost-Awareness. The entire AWS backend (Lambda + SageMaker Serverless) scales to exactly zero when not in use, costing $0 during idle times. DynamoDB TTL automates database cleanup.
+**SpamShield AI** là hệ thống cổng bảo mật email (Secure Email Gateway) chạy hoàn toàn trên kiến trúc Serverless. Hệ thống kết hợp sức mạnh của mô hình ngôn ngữ lớn (Multi-LLM) và ma trận phòng thủ an ninh mạng nhiều lớp nhằm phân loại email với độ chính xác cao (Ham / Spam / Scam), đồng thời cung cấp khả năng phân tích ngữ cảnh theo thời gian thực (Explainable AI).
 
 ---
 
-## 🔐 Zero-Gap Security (7-Layer Defense)
+## 🚀 Kiến trúc Hệ thống (System Architecture)
 
-Unlike traditional filtering tools, SpamShield is hardened against modern bypass techniques:
+Dự án được thiết kế theo triết lý **Microservices** và **Event-Driven Architecture**, chia làm 3 phân hệ chính:
 
-1.  **Network Header Forensics:** Extracts `Authentication-Results` and `Received:` chains to expose Originating IPs, defeating DMARC/SPF bypass via trial third-party mailers (e.g., SendGrid/Mailchimp spoofing).
-2.  **Strict eTLD+1 Whitelisting:** Prevents Subdomain Attacks (e.g., `accounts.google.com.evil.com`) by strictly extracting and verifying the registered domain.
-3.  **Adversarial Text Sanitization:** A robust NLP pre-processing pipeline that neutralizes Zero-width characters, Homoglyphs, Leet-speak, and Sentence Splitting evasion tactics.
-4.  **Polyglot Malware Inspection:** Analyzes Magic Bytes (Hex signatures) of attachments to catch malware disguised under safe extensions (e.g., a PDF containing a hidden ZIP/EXE payload).
-5.  **Conditional Cache Bypass:** Defeats "Cache Poisoning" (spear-phishing attacks using aged domains) by forcing AI re-evaluation if emergency trigger words are detected.
-6.  **QRishing Readiness:** Architecture prepared for QR code Base64 extraction to combat malicious links hidden in images.
-7.  **Automated Threat Intelligence:** A background microservice (EventBridge + Lambda) synchronizes global malicious URLs from Abuse.ch hourly.
+1. **Client Edge (Chrome Extension V3):** Giao diện quét email bất đồng bộ, xử lý lazy-loading giúp chống treo main-thread của trình duyệt.
+2. **API & Orchestration (AWS API Gateway + Lambda):** Trung tâm điều phối luồng dữ liệu, tích hợp cơ chế Early-Write/Post-Inference giúp loại bỏ độ trễ phản hồi (Zero-latency UI).
+3. **Hybrid AI Engine (SageMaker + Groq):** Kết hợp ViBERTa (Fine-tuned cho tiếng Việt) và Llama-3.1-8B-Instant cho phán quyết ngữ cảnh phức tạp.
 
 ---
 
-## 🏛️ System Architecture
+## ✨ Tính năng Cốt lõi & Điểm nhấn Kỹ thuật
 
-SpamShield utilizes a microservices architecture hosted entirely on AWS:
+### 1. Ma trận Phòng thủ 7 lớp (Zero-Gap Security Matrix)
+Thay vì chỉ dựa vào AI chấm điểm văn bản thuần túy, hệ thống bọc lót 7 lỗ hổng mạng phổ biến:
+* **Header Forensics:** Phân tích DMARC/SPF và chuỗi `Received:` để truy vết IP giả mạo.
+* **Impersonation Prevention:** Super Whitelist và bóc tách eTLD+1 để chặn tên miền nhái (VD: `vcb.com.vn.evil.net`).
+* **Polyglot Malware Detection:** Đọc Magic Bytes (Hex header) để lật tẩy mã độc ngụy trang (ZIP ẩn trong PDF).
+* **Adversarial Text Cleaning:** Triệt tiêu zero-width characters và Leet-speak (VD: `t4i kh04n`).
+* **Threat Intelligence Sync:** Bot EventBridge tự động cào dữ liệu URL độc hại từ tổ chức Abuse.ch mỗi giờ.
 
-*   **Client Edge:** Chrome Extension V3 (`background.js` Service Worker) handles DOM extraction and asynchronous polling.
-*   **Main Worker (AWS Lambda):** The core router that executes heuristics (Levenshtein, WHOIS, DNS checks) and orchestrates AI inference.
-*   **Inference Engine (Amazon SageMaker):** Serverless Endpoint running the PyTorch container for the ViBert model.
-*   **Threat Intel Bot (AWS Lambda):** An isolated worker syncing URLhaus data hourly.
-*   **Storage (DynamoDB):** Caches reputation scores and blacklists with automated TTL (Time-To-Live) expiration.
+### 2. Tối ưu hóa Chi phí (FinOps - Scale to Zero)
+* Áp dụng **Amazon SageMaker Serverless Inference**, tự động scale instance về 0 khi không có lưu lượng truy cập (tránh lãng phí GPU nhàn rỗi).
+* Sử dụng cơ chế Time-To-Live (TTL) trên **DynamoDB** để tự động dọn rác dữ liệu sau 7 ngày, tối ưu 100% chi phí lưu trữ.
+* Cache kết quả quét bằng Rep-Table, giảm thiểu số lần gọi Model đắt tiền.
 
----
-
-## 🚀 Installation & Setup
-
-### 1. Extension Setup
-1. Clone this repository.
-2. Open Chrome and navigate to `chrome://extensions/`.
-3. Enable **Developer mode** (top right).
-4. Click **Load unpacked** and select the extension directory.
-
-### 2. AWS Backend Deployment
-*(Note: AWS deployment requires setting up IAM Roles, API Gateways, and SageMaker models. Detailed terraform/cloudformation scripts are WIP).*
-*   Deploy `lambda_function.py` to the Main Worker Lambda.
-*   Deploy `threat_intel_sync.py` to a secondary Lambda with an EventBridge rate(1 hour) trigger.
-*   Ensure DynamoDB tables (`spamshield-jobs`, `spamshield-reputation`, `spamshield-threat-intel`) are active with `expires_at` TTL configured.
+### 3. Vòng lặp Active Learning Bất đồng bộ
+* **Early-Write:** Trả ngay kết quả ViBERTa về Client để đảm bảo tốc độ (1-2s).
+* **Post-Inference (Offline Batch Retraining):** Ở hậu trường, nếu ViBERTa rơi vào "vùng xám" (Confidence 40-70%), Llama-3.1 sẽ được gọi để làm trọng tài. Ca sai lệch sẽ tự động lưu vào bảng `spamshield-retrain-pool` phục vụ cho việc Fine-tune mô hình offline hàng tuần mà không ảnh hưởng hiệu năng hệ thống live.
 
 ---
 
-## 🎓 About
+## 🛠️ Tech Stack
+* **Cloud Infrastructure:** AWS Lambda, Amazon DynamoDB, API Gateway, Amazon S3, EventBridge.
+* **Machine Learning:** Amazon SageMaker, FastText, ViBERTa (PhoBERT-based).
+* **External AI:** Groq Llama-3.1-8B API (Explainable AI / Context Arbitrator).
+* **Frontend/Client:** JavaScript (Chrome Extension Manifest V3).
+* **Networking/Security:** `whois`, `dnspython`, Magic Bytes Inspector.
 
-This project was developed as a **Graduation Thesis** demonstrating the intersection of **Cybersecurity (SecOps)**, **Cloud Architecture (FinOps)**, and **Artificial Intelligence (NLP)**. 
+---
 
-**Disclaimer:** This tool is for educational and research purposes. Do not use the threat intelligence feeds for commercial purposes without adhering to the respective providers' licenses.
+## ⚙️ Hướng dẫn Cài đặt & Triển khai
+
+### 1. Yêu cầu hệ thống
+* Tài khoản AWS (IAM Role cấp quyền S3, SageMaker, DynamoDB).
+* API Key của Groq (Llama 3.1).
+* Trình duyệt nền tảng Chromium để nạp Extension.
+
+### 2. Cấu hình Biến môi trường
+Tuyệt đối không lưu API Key trực tiếp vào mã nguồn. Vui lòng tham khảo file `.env.example`:
+```bash
+# Định nghĩa tại mục Configuration -> Environment variables của hàm AWS Lambda 'worker'
+GROQ_API_KEY="your_groq_api_key_here"
