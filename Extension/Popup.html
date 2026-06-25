@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        /* CSS bám sát giao diện Dark Mode chuẩn của SpamShield AI */
+        body { width: 380px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #fff; margin: 0; padding: 15px; }
+        .action-section { display: block; }
+        .loading-section { display: none; text-align: center; margin-top: 20px;}
+        .result-section { display: none; }
+
+        /* Nút bấm (Action Buttons) */
+        .btn-blue { background-color: #4285f4; color: white; padding: 12px; width: 100%; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-bottom: 10px; }
+        .btn-yellow { background-color: #fbbc04; color: #000; padding: 12px; width: 100%; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-red { background-color: #ea4335; color: white; padding: 10px; width: 100%; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px;}
+        
+        /* Khung Kết quả (Result Card) - Khớp với ảnh */
+        .result-card { 
+            background-color: #2b281c; /* Nền ám vàng nhẹ cho Đáng ngờ */
+            border: 1px solid #fbbc04; 
+            border-radius: 8px; 
+            padding: 15px; 
+            text-align: center;
+        }
+        .result-title { font-size: 16px; font-weight: bold; margin-bottom: 5px; color: #fbbc04; }
+        .result-score { font-size: 32px; font-weight: bold; margin: 0 0 15px 0; }
+        
+        /* Hàng điểm số phân tích (Breakdown) */
+        .breakdown { display: flex; justify-content: space-between; font-size: 11px; background-color: #201e15; padding: 10px; border-radius: 6px; margin-bottom: 15px; }
+        .bd-ham { color: #a1a1aa; }
+        .bd-spam { color: #a1a1aa; }
+        .bd-scam { color: #ea4335; }
+
+        /* Bằng chứng nhận diện (Evidence Box) */
+        .evidence-box { background-color: #383322; padding: 12px; border-radius: 6px; text-align: left; font-size: 13px; }
+        .evidence-title { font-weight: bold; margin-bottom: 8px; color: #d4d4d8; }
+        .evidence-list { margin: 0; padding-left: 20px; color: #d4d4d8; }
+        .evidence-list li { margin-bottom: 4px; }
+        
+        /* Highlight Llama 3.1 */
+        .llama-insight { color: #d7aefb; font-weight: bold; font-style: italic; list-style-type: none; border-left: 3px solid #af5cf6; padding-left: 8px; margin-left: -15px;}
+
+        /* Nút Whitelist */
+        .btn-whitelist { background-color: #10b981; color: white; width: 100%; padding: 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <!-- MÀN HÌNH 1: CHỌN CHẾ ĐỘ -->
+    <div id="action-section" class="action-section">
+        <div style="text-align: center; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px;">
+            <h3 style="margin:0; color:#8ab4f8;">🛡️ SpamShield AI</h3>
+        </div>
+        <div style="font-size: 11px; color:#9ca3af; margin-bottom: 5px;">BẢN THƯỜNG</div>
+        <button id="btn-standard" class="btn-blue">⚡ Quét Nhanh (Ham / Scam)</button>
+        
+        <div style="font-size: 11px; color:#9ca3af; margin-bottom: 5px; margin-top: 15px;">BẢN PRO <span style="background:#fbbc04; color:#000; padding:2px 4px; border-radius:3px;">PRO</span></div>
+        <button id="btn-pro" class="btn-yellow">✨ Quét Chuyên Sâu (ViBert)</button>
+    </div>
+
+    <!-- MÀN HÌNH 2: LOADING -->
+    <div id="loading-section" class="loading-section">
+        <h3 style="color:#8ab4f8;">⏳ Đang phân tích ngữ cảnh...</h3>
+        <button id="btn-stop" class="btn-red">🛑 Dừng quét ngay</button>
+    </div>
+
+    <!-- MÀN HÌNH 3: KẾT QUẢ QUÉT -->
+    <div id="result-section" class="result-section">
+        <div id="result-card" class="result-card">
+            <div id="result-title" class="result-title">⚠️ ĐÁNG NGỜ</div>
+            <div id="result-score" class="result-score">0.0%</div>
+            
+            <div class="breakdown">
+                <div class="bd-ham">An toàn: <span id="score-ham">0.0%</span></div>
+                <div class="bd-spam">Rác: <span id="score-spam">0.0%</span></div>
+                <div class="bd-scam">Lừa đảo: <span id="score-scam">0.0%</span></div>
+            </div>
+
+            <div class="evidence-box">
+                <div class="evidence-title">📌 Bằng chứng nhận diện:</div>
+                <ul id="highlights-list" class="evidence-list">
+                    <!-- Javascript sẽ nhồi danh sách bằng chứng vào đây -->
+                </ul>
+            </div>
+        </div>
+        
+        <button id="btn-whitelist" class="btn-whitelist">✅ Đưa vào Whitelist</button>
+        <button id="btn-back" class="btn-blue" style="margin-top: 10px; background-color: #5f6368;">🔙 Quét email khác</button>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>
