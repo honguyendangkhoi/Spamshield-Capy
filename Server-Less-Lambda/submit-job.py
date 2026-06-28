@@ -15,17 +15,44 @@ def lambda_handler(event, context):
         text = body.get('text', '').strip()
         mode = body.get('mode', 'standard')
 
-        if not text:
+        # Nếu là feedback, không yêu cầu text
+        if mode != 'feedback' and not text:
             return _resp(400, {'error': 'text is required'})
 
-        # Cắt text xuống 1500 ký tự — inference nhanh hơn ~40%, đủ để phân tích spam
-        text = text[:1500]
+        text = text[:1500] if text else ''
 
         job_id = str(uuid.uuid4())
-        ttl    = int(time.time()) + 3600  # tự xóa sau 1h
+        ttl    = int(time.time()) + 3600
 
-        # Ghi job vào DynamoDB với status=pending
         table = dynamodb.Table(TABLE_NAME)
+
+        # ============================================================
+        # THÊM MỚI: XỬ LÝ FEEDBACK
+        # ============================================================
+        if mode == 'feedback':
+            feedback_payload = {
+                'job_id': job_id,
+                'text': text[:2000] if text else '',
+                'mode': 'feedback',
+                'original_prediction': body.get('original_prediction', ''),
+                'correct_label': body.get('correct_label', ''),
+                'source': body.get('source', 'user_feedback'),
+                'confidence': body.get('confidence', 1.0),
+                'sender_domain': body.get('sender_domain', ''),
+            }
+            sqs.send_message(
+                QueueUrl=QUEUE_URL,
+                MessageBody=json.dumps(feedback_payload)
+            )
+            table.put_item(Item={
+                'job_id': job_id,
+                'status': 'pending',
+                'mode': 'feedback',
+                'ttl': ttl,
+            })
+            return _resp(200, {'job_id': job_id, 'message': 'feedback submitted'})
+
+        # Nếu không phải feedback, xử lý như cũ
         table.put_item(Item={
             'job_id': job_id,
             'status': 'pending',
@@ -33,7 +60,6 @@ def lambda_handler(event, context):
             'ttl':    ttl,
         })
 
-        # Đẩy job vào SQS
         sqs.send_message(
             QueueUrl    = QUEUE_URL,
             MessageBody = json.dumps({'job_id': job_id, 'text': text, 'mode': mode}),
