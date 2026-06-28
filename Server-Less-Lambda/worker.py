@@ -58,6 +58,29 @@ SPAM_KEYWORDS = [
 ]
 
 # ==========================================
+# THÊM MỚI: TẢI WHITELIST CONFIG TỪ S3 (CÓ FALLBACK CỨNG)
+# ==========================================
+_whitelist_config = None
+
+def load_whitelist_config():
+    global _whitelist_config
+    if _whitelist_config is not None:
+        return
+    try:
+        s3_client = boto3.client('s3')
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key='config/whitelist_config.json')
+        _whitelist_config = json.loads(obj['Body'].read().decode('utf-8'))
+        print("[Config] Whitelist config loaded from S3")
+    except Exception as e:
+        print(f"[Config] Failed to load whitelist from S3, using defaults: {e}")
+        _whitelist_config = {
+            "global_vip": ["google.com", "youtube.com", "apple.com", "microsoft.com", "github.com", "facebook.com"],
+            "vn_vip": ["vietcombank.com.vn", "vcb.com.vn", "techcombank.com.vn", "momo.vn", "shopee.vn"]
+        }
+
+load_whitelist_config()
+
+# ==========================================
 # CÁC HÀM TIỀN XỬ LÝ VÀ BẢO MẬT
 # ==========================================
 def advanced_clean_text(text):
@@ -337,21 +360,27 @@ def _should_save_standard_retrain(top_label, top_score, text):
     return False, f'unknown_label ({top_label})'
 
 
+# ============================================================
+# HÀM LƯU RETRAIN POOL (ĐÃ SỬA ĐỂ HỖ TRỢ FEEDBACK)
+# ============================================================
 def save_to_retrain_pool(text, viberta_label, viberta_scores,
                          correct_label, source, confidence,
                          mode='pro', top_label=None, top_score=None):
-    if mode == 'standard' and source != 'user_feedback':
+    if mode == 'feedback':
+        pass
+    elif mode == 'standard' and source != 'user_feedback':
         should_save, gate_reason = _should_save_standard_retrain(top_label, top_score, text)
         if not should_save:
             print(f"[RetrainPool][Standard] Bỏ qua: {gate_reason}")
             return
         print(f"[RetrainPool][Standard] Cho phép lưu: {gate_reason}")
-    if mode == 'pro':
+    elif mode == 'pro':
         AUTO_SOURCES = {'medium_confidence_auto', 'fasttext_fast_path',
                         'fasttext_middle_path', 'groq_low_conf', 'groq_scam_no_trigger'}
         if source in AUTO_SOURCES and viberta_label == correct_label:
             print(f"[RetrainPool][Pro] Bỏ qua auto-correct khớp: {source}")
             return
+
     try:
         dynamodb.Table('spamshield-retrain-pool').put_item(Item={
             'timestamp'      : Decimal(str(time.time())),
@@ -535,8 +564,8 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         penalty_signals.append({'type': 'header_spoofed', 'weight': 1.0})
         highlights.extend(routing["reason"])
 
-    # Whitelist VIP
-    GLOBAL_VIP = ['google.com', 'youtube.com', 'apple.com', 'microsoft.com', 'github.com', 'facebook.com']
+    # Whitelist VIP (dùng config từ S3, fallback cứng)
+    GLOBAL_VIP = _whitelist_config.get('global_vip', ['google.com', 'youtube.com', 'apple.com', 'microsoft.com', 'github.com', 'facebook.com'])
     if strict_whitelist_check(sender_domain, GLOBAL_VIP) and check_email_security(sender_domain) == 0 and not routing["is_spoofed"]:
         result = {'prediction': 'ham', 'probability': 1.0, 'details': {'ham': 1.0, 'spam': 0.0, 'scam': 0.0},
                   'mode': 'pro', 'highlights': ['🛡️ Tổ chức Quốc tế'], 'dns_penalty_applied': False}
@@ -596,8 +625,8 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
     # WHOIS
     safe_whois_check(sender_domain, penalty_signals, highlights)
 
-    # Domain impersonation
-    vn_vip = ['vietcombank.com.vn', 'vcb.com.vn', 'techcombank.com.vn', 'momo.vn', 'shopee.vn']
+    # Domain impersonation (dùng config)
+    vn_vip = _whitelist_config.get('vn_vip', ['vietcombank.com.vn', 'vcb.com.vn', 'techcombank.com.vn', 'momo.vn', 'shopee.vn'])
     for v in vn_vip:
         if 0 < len(sender_domain) <= len(v) + 2 and sender_domain != v:
             penalty_signals.append({'type': 'domain_impersonation', 'weight': 0.8})
@@ -617,21 +646,19 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         scores['ham']  = max(0.0, scores['ham'] - boost)
         print(f"[Pro] Spam boost: +{boost:.2f}")
 
-    # Cập nhật lại viberta_label sau penalty + boost
     if not viberta_failed:
         viberta_label = max(scores, key=scores.get)
 
     # =============================================================
-    # BƯỚC 2: Groq (Teacher) — LUÔN CHẠY ĐỂ KIỂM TRA LẠI
+    # BƯỚC 2: Groq (Teacher)
     # =============================================================
     print("[Pro] Gọi Groq Teacher...")
     groq_label = _verify_external_intelligence(text)
 
     # =============================================================
-    # BƯỚC 3: So sánh Student vs Teacher → Quyết định
+    # BƯỚC 3: So sánh Student vs Teacher
     # =============================================================
     if viberta_failed:
-        # ViBERTa chết → Groq làm trọng tài
         final_prediction = groq_label or 'ham'
         print(f"[Pro] ViBERTa failed → Groq Teacher quyết định: {final_prediction}")
         result = {
@@ -644,11 +671,9 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         return result
 
     if groq_label is None:
-        # Groq timeout → dùng ViBERTa
         final_prediction = viberta_label or 'ham'
         print(f"[Pro] Groq timeout → dùng ViBERTa Student: {final_prediction}")
     elif groq_label == viberta_label:
-        # CÙNG Ý KIẾN → lưu retrain pool để củng cố Student
         final_prediction = viberta_label
         print(f"[Pro] ✅ Student=Teacher: {final_prediction} → lưu retrain pool")
         save_to_retrain_pool(
@@ -657,7 +682,6 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             confidence=scores.get(viberta_label, 0.0), mode='pro'
         )
     else:
-        # KHÁC Ý KIẾN → Teacher (Groq) là đúng → lưu retrain pool để Student học
         final_prediction = groq_label
         print(f"[Pro] 🔄 Student={viberta_label} ≠ Teacher={groq_label} → học từ Teacher")
         save_to_retrain_pool(
@@ -666,7 +690,6 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
             confidence=scores.get(viberta_label, 0.0), mode='pro'
         )
 
-    # AI insight
     if scores.get('scam', 0) > 0.6 and not any(s['type'] in ('header_spoofed', 'malware', 'threat_intel') for s in penalty_signals):
         highlights.append("🤖 AI phát hiện hành vi thao túng tâm lý ngầm")
 
@@ -677,7 +700,6 @@ def process_pro_mode(text, sender_domain, raw_headers="", attachments={}, qr_ima
         'dns_penalty_applied': dns_penalty > 0
     }
 
-    # LUÔN LƯU REPUTATION CACHE — cả 2 model
     print(f"[Pro] Lưu reputation: {sender_domain} → {final_prediction}")
     save_to_reputation_cache(sender_domain, result)
     return result
@@ -691,9 +713,35 @@ def lambda_handler(event, context):
         job   = json.loads(record['body'])
         table = dynamodb.Table(TABLE_NAME)
         sd = job.get('sender_domain', '')
-        print(f"[DEBUG] sender_domain='{sd}' | mode={job.get('mode', 'standard')}")
+        mode = job.get('mode', 'standard')
+        print(f"[DEBUG] sender_domain='{sd}' | mode={mode}")
         try:
-            mode = job.get('mode', 'standard')
+            # ============================================================
+            # THÊM MỚI: XỬ LÝ FEEDBACK JOB
+            # ============================================================
+            if mode == 'feedback':
+                text_fb = job.get('text', '')
+                original_pred = job.get('original_prediction', 'unknown')
+                correct_lbl = job.get('correct_label', '')
+                source_fb = job.get('source', 'user_feedback')
+                conf_fb = float(job.get('confidence', 1.0))
+                save_to_retrain_pool(
+                    text=text_fb,
+                    viberta_label=original_pred,
+                    viberta_scores={},
+                    correct_label=correct_lbl,
+                    source=source_fb,
+                    confidence=conf_fb,
+                    mode='feedback'
+                )
+                table.update_item(
+                    Key={'job_id': job['job_id']},
+                    UpdateExpression='SET #s = :s',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':s': 'done'}
+                )
+                continue
+
             hdrs = job.get('raw_headers', '')
             atts = job.get('attachments_b64', {})
             qrs  = job.get('qr_images_b64', [])
