@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnStop = document.getElementById('btn-stop');
     const btnBack = document.getElementById('btn-back');
     const btnWhitelist = document.getElementById('btn-whitelist');
+    const btnHistory = document.getElementById('btn-history');
+    const btnManageLists = document.getElementById('btn-manage-lists');
 
     const resultCard = document.getElementById('result-card');
     const resultTitle = document.getElementById('result-title');
@@ -18,10 +20,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const scoreScam = document.getElementById('score-scam');
     const highlightsList = document.getElementById('highlights-list');
 
+    const sensBtns = document.querySelectorAll('.sens-btn');
+    const sensDescription = document.getElementById('sens-description');
+
+    const resultMode = document.getElementById('result-mode');
+    const feedbackSection = document.getElementById('feedback-section');
+    const fbHam = document.getElementById('fb-ham');
+    const fbSpam = document.getElementById('fb-spam');
+    const fbScam = document.getElementById('fb-scam');
+    const feedbackMsg = document.getElementById('feedback-msg');
+
+    const SCAM_KEYWORDS = [
+        'chuyển tiền', 'mật khẩu', 'otp', 'khóa tài khoản', 'xác minh',
+        'khẩn cấp', 'ngay lập tức', 'cảnh báo', 'bị khóa', 'đăng nhập',
+        'trúng thưởng đặc biệt', 'click ngay', 'hết hạn hôm nay'
+    ];
+
+    let currentResult = null;
+
     // ==========================================
     // 0. KHÔI PHỤC TRẠNG THÁI KHI MỞ POPUP
     // ==========================================
-    // Hỏi background xem trước khi tắt popup hệ thống đang làm gì
     chrome.runtime.sendMessage({ action: "GET_STATUS" }, (state) => {
         if (state) {
             if (state.scanning) {
@@ -37,6 +56,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ==========================================
+    // THIẾT LẬP ĐỘ NHẠY (3 NÚT)
+    // ==========================================
+    const sensitivityModes = {
+        relaxed:  { threshold: 0.85, desc: 'Chỉ cảnh báo khi rất chắc chắn (ít bị làm phiền)' },
+        balanced: { threshold: 0.65, desc: 'Cảnh báo hầu hết email đáng ngờ (mặc định)' },
+        strict:   { threshold: 0.45, desc: 'Nhạy hơn, có thể báo nhầm nhưng an toàn' }
+    };
+
+    chrome.storage.local.get(['user_bias'], (data) => {
+        let bias = data.user_bias || 0;
+        let threshold = 0.65 + bias;
+        let currentMode = 'balanced';
+        if (threshold >= 0.85) currentMode = 'relaxed';
+        else if (threshold <= 0.45) currentMode = 'strict';
+        
+        sensBtns.forEach(btn => {
+            if (btn.dataset.mode === currentMode) {
+                btn.classList.add('active');
+                btn.style.background = '#4285f4';
+            } else {
+                btn.classList.remove('active');
+                btn.style.background = '#3c4043';
+            }
+        });
+        sensDescription.textContent = sensitivityModes[currentMode].desc;
+    });
+
+    sensBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            const threshold = sensitivityModes[mode].threshold;
+            const bias = threshold - 0.65;
+            
+            chrome.storage.local.set({ user_bias: bias });
+            
+            sensBtns.forEach(b => {
+                b.classList.remove('active');
+                b.style.background = '#3c4043';
+            });
+            btn.classList.add('active');
+            btn.style.background = '#4285f4';
+            sensDescription.textContent = sensitivityModes[mode].desc;
+        });
+    });
+
+    // ==========================================
     // 1. SỰ KIỆN NÚT BẤM
     // ==========================================
     btnStandard.addEventListener('click', () => startScanning("standard"));
@@ -48,18 +113,48 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     btnBack.addEventListener('click', () => {
-        // Yêu cầu background xóa trí nhớ
         chrome.runtime.sendMessage({ action: "RESET_STATE" });
         showIdle();
     });
     
     btnWhitelist.addEventListener('click', () => {
-        // Đưa vào whitelist và reset giao diện
         chrome.runtime.sendMessage({ action: "TRUST_CURRENT_SENDER" });
         alert("Đã thêm địa chỉ này vào danh sách Whitelist an toàn!");
         chrome.runtime.sendMessage({ action: "RESET_STATE" });
         showIdle();
     });
+
+    fbHam.addEventListener('click', () => sendFeedback('ham'));
+    fbSpam.addEventListener('click', () => sendFeedback('spam'));
+    fbScam.addEventListener('click', () => sendFeedback('scam'));
+
+    function sendFeedback(label) {
+        if (!currentResult) return;
+        chrome.runtime.sendMessage({
+            action: "USER_FEEDBACK",
+            label: label,
+            originalResult: currentResult
+        });
+        feedbackMsg.textContent = `✅ Đã gửi phản hồi: ${label.toUpperCase()}`;
+        fbHam.disabled = true;
+        fbSpam.disabled = true;
+        fbScam.disabled = true;
+        setTimeout(() => {
+            feedbackMsg.textContent = '';
+        }, 2000);
+    }
+
+    if (btnHistory) {
+        btnHistory.addEventListener('click', () => {
+            chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
+        });
+    }
+
+    if (btnManageLists) {
+        btnManageLists.addEventListener('click', () => {
+            chrome.tabs.create({ url: chrome.runtime.getURL('whitelist.html') });
+        });
+    }
 
     function startScanning(mode) {
         showLoading();
@@ -85,7 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ==========================================
-    // 2. LẮNG NGHE KẾT QUẢ TỪ BACKGROUND MỚI TRẢ VỀ
+    // 2. LẮNG NGHE KẾT QUẢ TỪ BACKGROUND
     // ==========================================
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === "SCAN_COMPLETE") {
@@ -96,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ==========================================
-    // 3. RENDER GIAO DIỆN & MÀU SẮC
+    // 3. RENDER GIAO DIỆN
     // ==========================================
     function clearError() {
         const errDiv = document.getElementById('error-display');
@@ -108,6 +203,12 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingSection.style.display = 'none';
         resultSection.style.display = 'none';
         clearError();
+        currentResult = null;
+        feedbackSection.style.display = 'none';
+        fbHam.disabled = false;
+        fbSpam.disabled = false;
+        fbScam.disabled = false;
+        feedbackMsg.textContent = '';
     }
 
     function showLoading() {
@@ -149,11 +250,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const mainProb = (data.probability * 100).toFixed(1);
         const mode = data.mode || 'standard';
 
+        currentResult = data;
+
         const rowSpam = scoreSpam.parentElement;
         if (mode === 'standard') {
             rowSpam.style.display = 'none'; 
         } else {
             rowSpam.style.display = 'block'; 
+        }
+
+        if (resultMode) {
+            if (mode === 'standard') {
+                resultMode.innerText = '🚀 FastText (Standard)';
+                resultMode.style.backgroundColor = '#0F3460';
+                resultMode.style.color = '#F4D03F';
+            } else {
+                resultMode.innerText = '🧠 ViBERTa + Groq (Pro)';
+                resultMode.style.backgroundColor = '#2E4053';
+                resultMode.style.color = '#FFB085';
+            }
         }
 
         if (prediction === 'ham') {
@@ -199,5 +314,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             highlightsList.innerHTML = '<li style="color:gray; list-style:none;">Không phát hiện từ khóa nguy hiểm.</li>';
         }
+
+        feedbackSection.style.display = 'block';
+        fbHam.disabled = false;
+        fbSpam.disabled = false;
+        fbScam.disabled = false;
+        feedbackMsg.textContent = '';
+
+        // Gửi lệnh highlight từ khóa scam đến content script
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+            if (tabs[0]) {
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: "HIGHLIGHT_KEYWORDS",
+                    keywords: SCAM_KEYWORDS
+                }).catch(() => {});
+            }
+        });
     }
 });
