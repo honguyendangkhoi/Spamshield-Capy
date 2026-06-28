@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "SpamShield AI - Đồ án Tốt nghiệp",
+  "version": "3.0",
+  "description": "Tiện ích phát hiện tin nhắn lừa đảo và Spam trên Gmail",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://*.execute-api.ap-southeast-1.amazonaws.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["bank.json", "scam-emails.json"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

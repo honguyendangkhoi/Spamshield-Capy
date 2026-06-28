@@ -1,0 +1,10 @@
+{
+  "global_vip": [
+    "google.com", "youtube.com", "apple.com", "microsoft.com",
+    "github.com", "facebook.com"
+  ],
+  "vn_vip": [
+    "vietcombank.com.vn", "vcb.com.vn", "techcombank.com.vn",
+    "momo.vn", "shopee.vn"
+  ]
+}
