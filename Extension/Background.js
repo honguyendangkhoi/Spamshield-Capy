@@ -25,6 +25,24 @@ async function initBankList() {
 }
 
 // ============================================================
+// THÊM MỚI: Blacklist email lừa đảo từ file scam-emails.json
+// ============================================================
+let scamEmailSet = new Set();
+async function initScamEmailList() {
+  if (scamEmailSet.size > 0) return;
+  try {
+    const resp = await fetch(chrome.runtime.getURL('scam-emails.json'));
+    const data = await resp.json();
+    if (data.scam_emails) {
+      scamEmailSet = new Set(data.scam_emails.map(email => email.toLowerCase()));
+      console.log('[SpamShield] Loaded', scamEmailSet.size, 'scam emails from blocklist');
+    }
+  } catch (e) {
+    console.error("Lỗi nạp scam-emails.json:", e);
+  }
+}
+
+// ============================================================
 const VIP_DOMAINS  = [
   'vietcombank.com.vn', 'vcb.com.vn', 'fpt.vn', 'fpt.com.vn',
   'github.com', 'google.com', 'microsoft.com', 'amazon.com', 'apple.com',
@@ -99,8 +117,14 @@ class EdgeShield {
   static async isTrustedSender(senderEmail) {
     return new Promise((resolve) => {
       if (!senderEmail) return resolve(false);
-      chrome.storage.local.get(['trusted_senders'], (data) => {
-        resolve((data.trusted_senders || []).includes(senderEmail.toLowerCase()));
+      chrome.storage.local.get(['trusted_senders', 'blocked_senders'], (data) => {
+        const blocked = data.blocked_senders || [];
+        if (blocked.some(b => senderEmail.toLowerCase().includes(b))) {
+          resolve(false);
+          return;
+        }
+        const trusted = data.trusted_senders || [];
+        resolve(trusted.includes(senderEmail.toLowerCase()));
       });
     });
   }
@@ -176,6 +200,58 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     handleShutdown();
     sendResponse({ ok: true });
   }
+
+  // ============================================================
+  // THÊM MỚI: XỬ LÝ USER_FEEDBACK
+  // ============================================================
+  if (msg.action === 'USER_FEEDBACK') {
+      chrome.storage.local.get({ feedbackHistory: [] }, (data) => {
+          const history = data.feedbackHistory;
+          history.push({
+              timestamp: Date.now(),
+              originalPrediction: msg.originalResult.prediction,
+              userLabel: msg.label,
+              mode: msg.originalResult.mode || 'standard',
+              senderDomain: EdgeShield.getRootDomain(msg.originalResult.senderEmail || ''),
+              senderEmail: msg.originalResult.senderEmail || '',
+          });
+          if (history.length > 50) history.shift();
+          chrome.storage.local.set({ feedbackHistory: history });
+      });
+
+      const payload = {
+          text: msg.originalResult.text || '',
+          mode: 'feedback',
+          sender_domain: EdgeShield.getRootDomain(msg.originalResult.senderEmail || ''),
+          original_prediction: msg.originalResult.prediction,
+          correct_label: msg.label,
+          source: 'user_feedback',
+          confidence: msg.originalResult.probability || 0.0,
+      };
+      fetchWithTimeout(API_SUBMIT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+      }).then(res => res.json()).then(data => {
+          console.log('[Feedback] Đã gửi lên server:', data);
+      }).catch(err => {
+          console.error('[Feedback] Lỗi gửi:', err);
+      });
+
+      sendResponse({ ok: true });
+      return true;
+  }
+
+  // ============================================================
+  // THÊM MỚI: LẤY LỊCH SỬ QUÉT & FEEDBACK
+  // ============================================================
+  if (msg.action === 'GET_HISTORY') {
+      chrome.storage.local.get({ scanHistory: [], feedbackHistory: [] }, (data) => {
+          sendResponse(data);
+      });
+      return true;
+  }
+
   return true;
 });
 
@@ -264,7 +340,8 @@ async function handleScan(mode, tabId) {
     }
   });
 
-  const [bankInit, results] = await Promise.all([initBankList(), extractPromise]);
+  // Load tất cả danh sách song song
+  const [bankInit, scamInit, results] = await Promise.all([initBankList(), initScamEmailList(), extractPromise]);
   let emailData = results?.[0]?.result || {};
 
   if (!emailData.text) {
@@ -275,11 +352,80 @@ async function handleScan(mode, tabId) {
   chrome.storage.local.set({ last_scanned_sender: emailData.senderEmail });
   if (_cancelRequested) return;
 
+  // ============================================================
+  // THÊM MỚI: KIỂM TRA DANH SÁCH EMAIL LỪA ĐẢO CỐ ĐỊNH
+  // ============================================================
+  if (emailData.senderEmail && scamEmailSet.has(emailData.senderEmail.toLowerCase())) {
+      const result = {
+          prediction: 'scam',
+          probability: 1.0,
+          highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
+          mode
+      };
+      setState({ scanning: false, progress: null, result, error: null });
+      sendResultNotification(result);
+
+      // Vẫn lưu lịch sử quét
+      const historyEntry = {
+          timestamp: Date.now(),
+          mode: mode,
+          prediction: 'scam',
+          probability: 1.0,
+          details: { ham: 0, spam: 0, scam: 1.0 },
+          highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
+          senderDomain: EdgeShield.getRootDomain(emailData.senderEmail),
+          senderEmail: emailData.senderEmail,
+          subject: emailData?.subject || '',
+      };
+      chrome.storage.local.get({ scanHistory: [] }, (data) => {
+          const history = data.scanHistory;
+          history.push(historyEntry);
+          if (history.length > 50) history.shift();
+          chrome.storage.local.set({ scanHistory: history });
+      });
+      return;
+  }
+
   if (await EdgeShield.isTrustedSender(emailData.senderEmail)) {
     const result = { prediction: 'ham', probability: 0.0, highlights: ['✅ Người gửi an toàn (Sổ tay)'], mode };
     setState({ scanning: false, progress: null, result, error: null });
     sendResultNotification(result);
     return; 
+  }
+
+  // ============================================================
+  // THÊM MỚI: KIỂM TRA BLACKLIST (CHẶN CỨNG) từ người dùng
+  // ============================================================
+  const isBlocked = await new Promise((resolve) => {
+      chrome.storage.local.get(['blocked_senders'], (data) => {
+          const blocked = data.blocked_senders || [];
+          resolve(blocked.some(b => emailData.senderEmail.toLowerCase().includes(b)));
+      });
+  });
+  if (isBlocked) {
+      const result = { prediction: 'scam', probability: 1.0, highlights: ['🚫 Địa chỉ này nằm trong danh sách chặn của bạn'], mode };
+      setState({ scanning: false, progress: null, result, error: null });
+      sendResultNotification(result);
+      return;
+  }
+
+  // ============================================================
+  // THÊM MỚI: UNSHORTEN LINKS TRƯỚC KHI PHÂN TÍCH
+  // ============================================================
+  if (emailData.links && emailData.links.length > 0) {
+      const unshortenedLinks = await Promise.all(emailData.links.map(async (link) => {
+          if (link.match(/bit\.ly|tinyurl\.com|goo\.gl|t\.co|ow\.ly|buff\.ly|cutt\.ly|rb\.gy/)) {
+              try {
+                  const res = await fetchWithTimeout(`https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(link)}`, {}, 3000);
+                  const data = await res.json();
+                  return data.resolved_url || link;
+              } catch (e) {
+                  return link;
+              }
+          }
+          return link;
+      }));
+      emailData.links = unshortenedLinks;
   }
 
   const edgeResult = EdgeShield.analyzeLinks(emailData.senderEmail, emailData.links);
@@ -459,6 +605,27 @@ async function pollResult(job_id, edgeResult, emailData = {}) {
           highlights:  highlights,
           mode:        isStandard ? 'standard' : 'pro',
         };
+
+        // ============================================================
+        // THÊM MỚI: LƯU LỊCH SỬ QUÉT
+        // ============================================================
+        const historyEntry = {
+            timestamp: Date.now(),
+            mode: isStandard ? 'standard' : 'pro',
+            prediction: prediction,
+            probability: displayProb,
+            details: syncedDetails,
+            highlights: highlights,
+            senderDomain: EdgeShield.getRootDomain(emailData?.senderEmail || ''),
+            senderEmail: emailData?.senderEmail || '',
+            subject: emailData?.subject || '',
+        };
+        chrome.storage.local.get({ scanHistory: [] }, (data) => {
+            const history = data.scanHistory;
+            history.push(historyEntry);
+            if (history.length > 50) history.shift();
+            chrome.storage.local.set({ scanHistory: history });
+        });
 
         setState({ scanning: false, progress: null, result, error: null });
         sendResultNotification(result);
