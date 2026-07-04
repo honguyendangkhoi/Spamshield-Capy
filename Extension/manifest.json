@@ -14,15 +14,29 @@
     "activeTab",
     "scripting",
     "storage",
-    "notifications"
+    "notifications",
+    "identity",
+    "windows"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://*.execute-api.ap-southeast-1.amazonaws.com/*"
+    "https://*.execute-api.ap-southeast-1.amazonaws.com/*",
+    "https://*.amazoncognito.com/*"
   ],
   "web_accessible_resources": [
     {
-      "resources": ["bank.json", "scam-emails.json"],
+      "resources": [
+        "bank.json",
+        "scam-emails.json",
+        "env.js",
+        "login.html",
+        "login.js",
+        "history.html",
+        "history.js",
+        "whitelist.html",
+        "whitelist.js",
+        "content.js"
+      ],
       "matches": ["<all_urls>"]
     }
   ],
