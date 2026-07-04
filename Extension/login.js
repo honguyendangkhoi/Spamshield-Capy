@@ -20,30 +20,54 @@ const redirectUri = chrome.identity.getRedirectURL('oauth2callback');
 const cognitoApiEndpoint = `https://cognito-idp.${COGNITO_CONFIG.region}.amazonaws.com`;
 
 // ==========================================
-// GOOGLE LOGIN
+// HELPER FUNCTIONS
+// ==========================================
+function showError(elementId, msg) {
+    const el = document.getElementById(elementId);
+    el.textContent = msg;
+    el.style.display = 'block';
+    const panel = el.closest('.form-panel');
+    panel.querySelectorAll('.success-msg').forEach(s => s.style.display = 'none');
+}
+
+function showSuccess(elementId, msg) {
+    const el = document.getElementById(elementId);
+    el.textContent = msg;
+    el.style.display = 'block';
+    const panel = el.closest('.form-panel');
+    panel.querySelectorAll('.error-msg').forEach(s => s.style.display = 'none');
+}
+
+// ==========================================
+// GOOGLE LOGIN (giữ prompt=select_account)
 // ==========================================
 document.getElementById('google-login').addEventListener('click', () => {
-    const authUrl = `${cognitoDomain}/oauth2/authorize?identity_provider=Google&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&client_id=${appClientId}&scope=openid+email`;
+    const authUrl = `${cognitoDomain}/oauth2/authorize?identity_provider=Google&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&client_id=${appClientId}&scope=openid+email&prompt=select_account`;
     chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (redirectUrl) => {
         if (chrome.runtime.lastError) {
             showError('login-error', 'Đăng nhập Google thất bại: ' + chrome.runtime.lastError.message);
             return;
         }
-        const params = new URLSearchParams(new URL(redirectUrl).hash.substring(1));
-        const idToken = params.get('id_token');
-        if (idToken) {
-            chrome.storage.local.set({ cognitoToken: idToken }, () => {
-                showSuccess('login-success', 'Đăng nhập Google thành công!');
-                setTimeout(() => window.close(), 1500);
-            });
-        } else {
-            showError('login-error', 'Không lấy được token từ Google');
+        try {
+            const params = new URLSearchParams(new URL(redirectUrl).hash.substring(1));
+            const idToken = params.get('id_token');
+            if (idToken) {
+                chrome.storage.local.set({ cognitoToken: idToken }, () => {
+                    showSuccess('login-success', 'Đăng nhập Google thành công! Đang chuyển hướng...');
+                    setTimeout(() => window.close(), 1500);
+                });
+            } else {
+                const error = params.get('error');
+                showError('login-error', 'Lỗi từ Google: ' + (error || 'Không lấy được token'));
+            }
+        } catch (e) {
+            showError('login-error', 'Lỗi xử lý đăng nhập Google');
         }
     });
 });
 
 // ==========================================
-// MICROSOFT LOGIN
+// MICROSOFT LOGIN (bỏ prompt để tránh lỗi)
 // ==========================================
 document.getElementById('microsoft-login').addEventListener('click', () => {
     const authUrl = `${cognitoDomain}/oauth2/authorize?identity_provider=Microsoft&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&client_id=${appClientId}&scope=openid+email`;
@@ -52,15 +76,20 @@ document.getElementById('microsoft-login').addEventListener('click', () => {
             showError('login-error', 'Đăng nhập Microsoft thất bại: ' + chrome.runtime.lastError.message);
             return;
         }
-        const params = new URLSearchParams(new URL(redirectUrl).hash.substring(1));
-        const idToken = params.get('id_token');
-        if (idToken) {
-            chrome.storage.local.set({ cognitoToken: idToken }, () => {
-                showSuccess('login-success', 'Đăng nhập Microsoft thành công!');
-                setTimeout(() => window.close(), 1500);
-            });
-        } else {
-            showError('login-error', 'Không lấy được token từ Microsoft');
+        try {
+            const params = new URLSearchParams(new URL(redirectUrl).hash.substring(1));
+            const idToken = params.get('id_token');
+            if (idToken) {
+                chrome.storage.local.set({ cognitoToken: idToken }, () => {
+                    showSuccess('login-success', 'Đăng nhập Microsoft thành công! Đang chuyển hướng...');
+                    setTimeout(() => window.close(), 1500);
+                });
+            } else {
+                const error = params.get('error');
+                showError('login-error', 'Lỗi từ Microsoft: ' + (error || 'Không lấy được token'));
+            }
+        } catch (e) {
+            showError('login-error', 'Lỗi xử lý đăng nhập Microsoft');
         }
     });
 });
@@ -89,14 +118,14 @@ document.getElementById('email-login-btn').addEventListener('click', async () =>
         const data = await res.json();
         if (data.id_token) {
             chrome.storage.local.set({ cognitoToken: data.id_token }, () => {
-                showSuccess('login-success', 'Đăng nhập thành công!');
+                showSuccess('login-success', 'Đăng nhập thành công! Đang chuyển hướng...');
                 setTimeout(() => window.close(), 1500);
             });
         } else {
-            showError('login-error', data.message || 'Đăng nhập thất bại.');
+            showError('login-error', data.message || 'Đăng nhập thất bại. Kiểm tra lại email/mật khẩu.');
         }
     } catch (e) {
-        showError('login-error', 'Lỗi kết nối.');
+        showError('login-error', 'Lỗi kết nối. Vui lòng thử lại.');
     }
 });
 
@@ -133,7 +162,7 @@ document.getElementById('register-btn').addEventListener('click', async () => {
             showError('reg-error', data.message || 'Đăng ký thất bại.');
         }
     } catch (e) {
-        showError('reg-error', 'Lỗi kết nối.');
+        showError('reg-error', 'Lỗi kết nối. Vui lòng thử lại.');
     }
 });
 
@@ -148,7 +177,7 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
     }
     const { pendingConfirmEmail } = await chrome.storage.local.get('pendingConfirmEmail');
     if (!pendingConfirmEmail) {
-        showError('confirm-error', 'Không tìm thấy email cần xác nhận.');
+        showError('confirm-error', 'Không tìm thấy email cần xác nhận. Vui lòng đăng ký lại.');
         return;
     }
     try {
@@ -165,7 +194,7 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
             })
         });
         if (res.ok) {
-            showSuccess('confirm-success', 'Xác nhận thành công!');
+            showSuccess('confirm-success', 'Xác nhận thành công! Bạn có thể đăng nhập ngay.');
             document.getElementById('code-section').style.display = 'none';
             chrome.storage.local.remove('pendingConfirmEmail');
             document.querySelector('.tab-btn[data-tab="login"]').click();
@@ -174,25 +203,6 @@ document.getElementById('confirm-btn').addEventListener('click', async () => {
             showError('confirm-error', data.message || 'Mã xác nhận không đúng.');
         }
     } catch (e) {
-        showError('confirm-error', 'Lỗi kết nối.');
+        showError('confirm-error', 'Lỗi kết nối. Vui lòng thử lại.');
     }
 });
-
-// ==========================================
-// HELPER FUNCTIONS
-// ==========================================
-function showError(elementId, msg) {
-    const el = document.getElementById(elementId);
-    el.textContent = msg;
-    el.style.display = 'block';
-    const panel = el.closest('.form-panel');
-    panel.querySelectorAll('.success-msg').forEach(s => s.style.display = 'none');
-}
-
-function showSuccess(elementId, msg) {
-    const el = document.getElementById(elementId);
-    el.textContent = msg;
-    el.style.display = 'block';
-    const panel = el.closest('.form-panel');
-    panel.querySelectorAll('.error-msg').forEach(s => s.style.display = 'none');
-}
