@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>SpamShield AI - Đăng nhập</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1e1e1e;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .login-container {
+            background: #252525;
+            padding: 40px;                     
+            border-radius: 16px;               
+            width: 460px;                      
+            text-align: center;
+        }
+        h2 { color: #8ab4f8; margin-bottom: 28px; font-size: 24px; }
+        .tab-buttons {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 2px solid #333;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 12px;                    
+            background: none;
+            border: none;
+            color: #9ca3af;
+            font-size: 16px;                  
+            cursor: pointer;
+            transition: color 0.3s, border-bottom 0.3s;
+        }
+        .tab-btn.active {
+            color: #8ab4f8;
+            border-bottom: 2px solid #8ab4f8;
+            font-weight: bold;
+        }
+        .form-panel { display: none; }
+        .form-panel.active { display: block; }
+
+        .social-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 14px 12px;               
+            margin: 12px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;                  
+            cursor: pointer;
+            color: white;
+            gap: 12px;
+            background: #2f2f2f;
+            border: 1px solid #555;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .social-btn:hover {
+            background: #3a3a3a;
+            border-color: #888;
+        }
+
+        .social-icon {
+            width: 26px;                      
+            height: 26px;
+        }
+        .divider { margin: 24px 0; color: #9ca3af; font-size: 13px; }
+        .input-field {
+            width: 100%;
+            padding: 12px 14px;               
+            margin: 10px 0;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: #1e1e1e;
+            color: #fff;
+            font-size: 15px;                  
+        }
+        .submit-btn {
+            background: #10b981;
+            color: white;
+            padding: 14px;                    
+            width: 100%;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;                  
+            margin-top: 12px;
+        }
+        .error-msg { color: #ea4335; font-size: 13px; margin-top: 6px; display: none; }
+        .success-msg { color: #10b981; font-size: 13px; margin-top: 6px; display: none; }
+        .code-section { display: none; margin-top: 14px; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h2><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAEzUlEQVR42m2SWXBTZRTH/993b5vkplm6JE26pPu0LNJaZRm20A46FUVkCQpD9UXUB/VBXvShdgZkxhn0SYdxYUSRUQRb1HEBpk4tFJQBq4UBU5ruaUvT0CVplib3fscH2Yo9L+e8/H9n+R9gbvDbubqwtGICwF5XRtqxLcvLx7atqRxz2SzHAOwtLV80AaD6AQ0AQJ4HKIx6/UIlw5FeX6M0vLmxGk5HNmTFhLHJ6Wf3f9OGzrACo79/YSQS6bijwXx0AJA4QyQeDxWrg3TktbqELd0soDeSJogyLSZx+K2diXx1mCKRSEji7EH5XKDHAxJEyDIp6/fvrGUtHX18VgPv899kvUPDjITg7X928Xd3b2JZlrT1gggeD2jOQPfVrMvLRTGRbtnDRZ+8sG6J6ULXIAamk+zA+QBauqcw6u9HfDaBmsoy1tE95EoMjn34u5cniYjNNyFnAHxAVWWhw2FITaGlJU5+KZENTdaDG0xo8s6gPDeL6xQ9VZXmOXxAFWNzOfzeuh6oQqDYbt2zeVk5YxDakQs+eAMRhAIjCAwPoqBsEX75ux9Iqtq2NZWs2Jm5R9UEPB7P/27ImpuaNAC6ZWU5K102M8KxOL8VmYW79nHk5OUjNy8fS1fVIBCKIhKL8QJ7OlZUFK4EoGtubtIAsPlcpoSqEQcD5xLMKYDP1w2AABB6erph0UtgXAJjDImkKgDQ/bbcAdKWrUJijCXavUPNl3tHYbWkUf3qcnT9ehzMYAUzWHHj7EnsWrcEitVEl24Mof1a30nGWGLLViHd7nrP5evXITU2NuLn0y3SjZGJnbHZBFXk2flTi7JhjfqxIHUar294BA67HV+eukjvHW/hXn/gncbGRt/Bg213n/uu3W63Wz57tk2tyMn6/sSezU+f6ezRvEPjkixxmAw6qJpAmk5GzWIXLvUGtCeqyyTP+yd/8I4EN61d65bb2trU+4FclrhQNVFQv3Zx58cvbzBzDsTiSTY+FUIkPgsAUPQ6pJuMMBsNRIKw+6OfQkfPXatMkfhAUhMcgOAAOAGkaiLXZlZaXTaLJTWF0+HWK6z75hQyrBY47TY47TZkWi3oD4bxeWsnS5E5leVkWhxWY2tSE7n03w05d7vBGUAljvR9B+prikrsFpVxiQ+MT+P6cBCpEkM8FkU8FkWqxPCP/xb6x0OQUmTOQOrb21YXVeRm7mMAud3gvP0cVwHwqiJHzdalJcJpMfB4QsWKsjz85RsGRSeRCE8gEZ4ARSfR0ePH8tIcCI3QOzbFH3vIJaqLHDUAePs5rnK1oYEDoIHAdJDA+BdnLlLz+avYtHIBJsMzuNo7DIuig0XR4UrvMCamZ/DMqgX46rcOqJFpcliNvGt0MgiA1IYGzm6/jgZgzYry/B/lrMK0UCTK6gpkXB7TKBaaYIeeWwIAePHYFRjMGfRotsRODagwGRXSgv0zf3QNPQmgHYAkAyDOOXRC9EwaC8zbd7yK0cE+fHv6O+x4/hU2EgjijeZPAQAVG19Cjj2LfX3kEGrrPHDmF7Hjn31gNmCod5ZzCCGIAWBEBMaYyeZwHnW6Suui4fDMbDSUUNWkV1GMBT2D/hMAUOLK3R6NRvtlOaVCp5hTFZMpbXTQd2r85uguIgozxvAvjCsVYiXpYZAAAAAASUVORK5CYII=" style="width:20px;height:20px;vertical-align:middle;margin-right:4px;"> SpamShield AI</h2>
+
+        <div class="tab-buttons">
+            <button class="tab-btn active" data-tab="login">Đăng nhập</button>
+            <button class="tab-btn" data-tab="register">Đăng ký</button>
+        </div>
+
+        <!-- PANEL ĐĂNG NHẬP -->
+        <div id="login-panel" class="form-panel active">
+            <button class="social-btn google-btn" id="google-login">
+                <span class="social-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="26" height="26">
+                        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                        <path fill="#FBBC05" d="M10.53 28.59A14.5 14.5 0 0 1 9 24c0-1.59.28-3.14.76-4.59l-7.98-6.19A23.985 23.985 0 0 0 0 24c0 3.77.87 7.35 2.56 10.56l7.97-5.97z"/>
+                        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 5.97C6.51 42.62 14.62 48 24 48z"/>
+                    </svg>
+                </span>
+                Đăng nhập với Google
+            </button>
+            <button class="social-btn microsoft-btn" id="microsoft-login">
+                <span class="social-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="26" height="26">
+                        <rect x="6" y="6" width="16" height="16" fill="#F25022" rx="2"/>
+                        <rect x="26" y="6" width="16" height="16" fill="#7FBA00" rx="2"/>
+                        <rect x="6" y="26" width="16" height="16" fill="#00A4EF" rx="2"/>
+                        <rect x="26" y="26" width="16" height="16" fill="#FFB900" rx="2"/>
+                    </svg>
+                </span>
+                Đăng nhập với Microsoft
+            </button>
+
+            <div class="divider">— HOẶC —</div>
+
+            <input type="email" class="input-field" id="login-email" placeholder="Email">
+            <input type="password" class="input-field" id="login-password" placeholder="Mật khẩu">
+            <button class="submit-btn" id="email-login-btn">Đăng nhập</button>
+            <div class="error-msg" id="login-error"></div>
+            <div class="success-msg" id="login-success"></div>
+        </div>
+
+        <!-- PANEL ĐĂNG KÝ -->
+        <div id="register-panel" class="form-panel">
+            <input type="email" class="input-field" id="reg-email" placeholder="Email">
+            <input type="password" class="input-field" id="reg-password" placeholder="Mật khẩu">
+            <button class="submit-btn" id="register-btn">Đăng ký</button>
+            <div class="error-msg" id="reg-error"></div>
+            <div class="success-msg" id="reg-success"></div>
+
+            <div class="code-section" id="code-section">
+                <input type="text" class="input-field" id="confirm-code" placeholder="Nhập mã xác nhận từ email">
+                <button class="submit-btn" id="confirm-btn">Xác nhận</button>
+                <div class="error-msg" id="confirm-error"></div>
+                <div class="success-msg" id="confirm-success"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="env.js"></script>
+    <script src="login.js"></script>
+</body>
+</html>
