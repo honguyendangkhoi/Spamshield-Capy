@@ -4,6 +4,7 @@ const BASE_URL         = 'https://7kjlqf9e5d.execute-api.ap-southeast-1.amazonaw
 const API_SUBMIT       = `${BASE_URL}/submit-job`;
 const API_POLL         = `${BASE_URL}/poll-job`;
 const API_URL_SHUTDOWN = `${BASE_URL}/shutdown`;
+const API_SYNC         = `${BASE_URL}/sync-list`;
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS  = 300000; 
@@ -190,7 +191,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let list = data.trusted_senders || [];
         if (!list.includes(data.last_scanned_sender.toLowerCase())) {
           list.push(data.last_scanned_sender.toLowerCase());
-          chrome.storage.local.set({ trusted_senders: list });
+          chrome.storage.local.set({ trusted_senders: list }, () => {
+            syncUserListsToCloud(); // đồng bộ lên cloud sau khi thay đổi
+          });
         }
       }
     });
@@ -248,6 +251,44 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'GET_HISTORY') {
       chrome.storage.local.get({ scanHistory: [], feedbackHistory: [] }, (data) => {
           sendResponse(data);
+      });
+      return true;
+  }
+
+  // ============================================================
+  // THÊM MỚI: ĐỒNG BỘ WHITELIST/BLACKLIST LÊN CLOUD
+  // ============================================================
+  if (msg.action === 'SYNC_LISTS') {
+      syncUserListsToCloud();
+      sendResponse({ ok: true });
+      return true;
+  }
+
+  // ============================================================
+  // THÊM MỚI: ĐĂNG XUẤT
+  // ============================================================
+  if (msg.action === 'LOGOUT') {
+      chrome.storage.local.remove('cognitoToken', () => {
+          sendResponse({ ok: true });
+      });
+      return true;
+  }
+
+  // ============================================================
+  // THÊM MỚI: LẤY THÔNG TIN USER TỪ TOKEN
+  // ============================================================
+  if (msg.action === 'GET_USER_INFO') {
+      chrome.storage.local.get(['cognitoToken'], (data) => {
+          if (!data.cognitoToken) {
+              sendResponse(null);
+              return;
+          }
+          try {
+              const payload = JSON.parse(atob(data.cognitoToken.split('.')[1]));
+              sendResponse({ email: payload.email });
+          } catch (e) {
+              sendResponse(null);
+          }
       });
       return true;
   }
@@ -365,23 +406,27 @@ async function handleScan(mode, tabId) {
       setState({ scanning: false, progress: null, result, error: null });
       sendResultNotification(result);
 
-      // Vẫn lưu lịch sử quét
-      const historyEntry = {
-          timestamp: Date.now(),
-          mode: mode,
-          prediction: 'scam',
-          probability: 1.0,
-          details: { ham: 0, spam: 0, scam: 1.0 },
-          highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
-          senderDomain: EdgeShield.getRootDomain(emailData.senderEmail),
-          senderEmail: emailData.senderEmail,
-          subject: emailData?.subject || '',
-      };
-      chrome.storage.local.get({ scanHistory: [] }, (data) => {
-          const history = data.scanHistory;
-          history.push(historyEntry);
-          if (history.length > 50) history.shift();
-          chrome.storage.local.set({ scanHistory: history });
+      // Chỉ lưu lịch sử nếu đã login
+      chrome.storage.local.get(['cognitoToken'], (tokenData) => {
+          if (tokenData.cognitoToken) {
+              const historyEntry = {
+                  timestamp: Date.now(),
+                  mode: mode,
+                  prediction: 'scam',
+                  probability: 1.0,
+                  details: { ham: 0, spam: 0, scam: 1.0 },
+                  highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
+                  senderDomain: EdgeShield.getRootDomain(emailData.senderEmail),
+                  senderEmail: emailData.senderEmail,
+                  subject: emailData?.subject || '',
+              };
+              chrome.storage.local.get({ scanHistory: [] }, (data) => {
+                  const history = data.scanHistory;
+                  history.push(historyEntry);
+                  if (history.length > 50) history.shift();
+                  chrome.storage.local.set({ scanHistory: history });
+              });
+          }
       });
       return;
   }
@@ -607,24 +652,28 @@ async function pollResult(job_id, edgeResult, emailData = {}) {
         };
 
         // ============================================================
-        // THÊM MỚI: LƯU LỊCH SỬ QUÉT
+        // THÊM MỚI: LƯU LỊCH SỬ QUÉT (CHỈ KHI ĐÃ LOGIN)
         // ============================================================
-        const historyEntry = {
-            timestamp: Date.now(),
-            mode: isStandard ? 'standard' : 'pro',
-            prediction: prediction,
-            probability: displayProb,
-            details: syncedDetails,
-            highlights: highlights,
-            senderDomain: EdgeShield.getRootDomain(emailData?.senderEmail || ''),
-            senderEmail: emailData?.senderEmail || '',
-            subject: emailData?.subject || '',
-        };
-        chrome.storage.local.get({ scanHistory: [] }, (data) => {
-            const history = data.scanHistory;
-            history.push(historyEntry);
-            if (history.length > 50) history.shift();
-            chrome.storage.local.set({ scanHistory: history });
+        chrome.storage.local.get(['cognitoToken'], (tokenData) => {
+            if (tokenData.cognitoToken) {
+                const historyEntry = {
+                    timestamp: Date.now(),
+                    mode: isStandard ? 'standard' : 'pro',
+                    prediction: prediction,
+                    probability: displayProb,
+                    details: syncedDetails,
+                    highlights: highlights,
+                    senderDomain: EdgeShield.getRootDomain(emailData?.senderEmail || ''),
+                    senderEmail: emailData?.senderEmail || '',
+                    subject: emailData?.subject || '',
+                };
+                chrome.storage.local.get({ scanHistory: [] }, (data) => {
+                    const history = data.scanHistory;
+                    history.push(historyEntry);
+                    if (history.length > 50) history.shift();
+                    chrome.storage.local.set({ scanHistory: history });
+                });
+            }
         });
 
         setState({ scanning: false, progress: null, result, error: null });
@@ -706,3 +755,27 @@ async function handleShutdown() {
 }
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// ============================================================
+// THÊM MỚI: ĐỒNG BỘ WHITELIST/BLACKLIST LÊN CLOUD
+// ============================================================
+async function syncUserListsToCloud() {
+    const { cognitoToken } = await chrome.storage.local.get('cognitoToken');
+    if (!cognitoToken) return;
+
+    const { trusted_senders = [], blocked_senders = [] } = await chrome.storage.local.get(['trusted_senders', 'blocked_senders']);
+
+    try {
+        await fetch(API_SYNC, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${cognitoToken}`
+            },
+            body: JSON.stringify({ trusted_senders, blocked_senders })
+        });
+        console.log('[Sync] Whitelist/Blacklist synced to cloud');
+    } catch (err) {
+        console.error('[Sync] Failed:', err);
+    }
+}
