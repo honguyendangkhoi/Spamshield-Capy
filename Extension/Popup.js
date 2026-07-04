@@ -100,7 +100,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     btnLoginInline.addEventListener('click', () => {
-        chrome.tabs.create({ url: chrome.runtime.getURL('login.html') });
+        chrome.windows.create({
+            url: chrome.runtime.getURL('login.html'),
+            type: 'popup',
+            width: 480,
+            height: 600
+        });
     });
 
     updateUserUI();
@@ -200,7 +205,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.cognitoToken) {
                 callback(true);
             } else {
-                chrome.tabs.create({ url: chrome.runtime.getURL('login.html') });
+                chrome.windows.create({
+                    url: chrome.runtime.getURL('login.html'),
+                    type: 'popup',
+                    width: 480,
+                    height: 600
+                });
                 callback(false);
             }
         });
@@ -209,7 +219,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnHistory) {
         btnHistory.addEventListener('click', () => {
             checkLogin((loggedIn) => {
-                if (loggedIn) chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
+                if (loggedIn) {
+                    chrome.windows.create({
+                        url: chrome.runtime.getURL('history.html'),
+                        type: 'popup',
+                        width: 650,
+                        height: 700
+                    });
+                }
             });
         });
     }
@@ -217,7 +234,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnManageLists) {
         btnManageLists.addEventListener('click', () => {
             checkLogin((loggedIn) => {
-                if (loggedIn) chrome.tabs.create({ url: chrome.runtime.getURL('whitelist.html') });
+                if (loggedIn) {
+                    chrome.windows.create({
+                        url: chrome.runtime.getURL('whitelist.html'),
+                        type: 'popup',
+                        width: 550,
+                        height: 600
+                    });
+                }
             });
         });
     }
