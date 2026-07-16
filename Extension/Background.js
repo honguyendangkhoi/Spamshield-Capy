@@ -13,6 +13,59 @@ const FETCH_TIMEOUT_MS = 8000;
 let _cancelRequested = false;
 
 // ============================================================
+// HELPER: Lấy email user từ token
+// ============================================================
+async function getUserEmail() {
+    const { cognitoToken } = await chrome.storage.local.get('cognitoToken');
+    if (!cognitoToken) return null;
+    try {
+        const payload = JSON.parse(atob(cognitoToken.split('.')[1]));
+        return payload.email || null;
+    } catch {
+        return null;
+    }
+}
+
+// ============================================================
+// LẤY KEY LỊCH SỬ THEO USER
+// ============================================================
+async function getHistoryKey() {
+    const email = await getUserEmail();
+    return email ? `scanHistory_${email}` : null;
+}
+
+// ============================================================
+// ĐỌC LỊCH SỬ CỦA USER HIỆN TẠI
+// ============================================================
+async function getUserScanHistory() {
+    const key = await getHistoryKey();
+    if (!key) return [];
+    const result = await chrome.storage.local.get(key);
+    return result[key] || [];
+}
+
+// ============================================================
+// LƯU LỊCH SỬ CỦA USER HIỆN TẠI
+// ============================================================
+async function saveUserScanHistory(historyArray) {
+    const key = await getHistoryKey();
+    if (!key) return;
+    await chrome.storage.local.set({ [key]: historyArray });
+}
+
+// ============================================================
+// THÊM MỘT MỤC VÀO LỊCH SỬ (giới hạn 50)
+// ============================================================
+async function addToScanHistory(entry) {
+    const key = await getHistoryKey();
+    if (!key) return;
+    const current = await getUserScanHistory();
+    current.push(entry);
+    if (current.length > 50) current.shift();
+    await chrome.storage.local.set({ [key]: current });
+}
+
+// ============================================================
 let bankDomainSet = new Set();
 async function initBankList() {
   if (bankDomainSet.size > 0) return;
@@ -205,7 +258,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // ============================================================
-  // THÊM MỚI: XỬ LÝ USER_FEEDBACK
+  // XỬ LÝ USER_FEEDBACK
   // ============================================================
   if (msg.action === 'USER_FEEDBACK') {
       chrome.storage.local.get({ feedbackHistory: [] }, (data) => {
@@ -246,11 +299,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // ============================================================
-  // THÊM MỚI: LẤY LỊCH SỬ QUÉT & FEEDBACK
+  // THÊM MỚI: LẤY LỊCH SỬ QUÉT THEO USER
   // ============================================================
   if (msg.action === 'GET_HISTORY') {
-      chrome.storage.local.get({ scanHistory: [], feedbackHistory: [] }, (data) => {
-          sendResponse(data);
+      getUserScanHistory().then(history => {
+          sendResponse({ scanHistory: history });
+      }).catch(() => {
+          sendResponse({ scanHistory: [] });
       });
       return true;
   }
@@ -406,28 +461,19 @@ async function handleScan(mode, tabId) {
       setState({ scanning: false, progress: null, result, error: null });
       sendResultNotification(result);
 
-      // Chỉ lưu lịch sử nếu đã login
-      chrome.storage.local.get(['cognitoToken'], (tokenData) => {
-          if (tokenData.cognitoToken) {
-              const historyEntry = {
-                  timestamp: Date.now(),
-                  mode: mode,
-                  prediction: 'scam',
-                  probability: 1.0,
-                  details: { ham: 0, spam: 0, scam: 1.0 },
-                  highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
-                  senderDomain: EdgeShield.getRootDomain(emailData.senderEmail),
-                  senderEmail: emailData.senderEmail,
-                  subject: emailData?.subject || '',
-              };
-              chrome.storage.local.get({ scanHistory: [] }, (data) => {
-                  const history = data.scanHistory;
-                  history.push(historyEntry);
-                  if (history.length > 50) history.shift();
-                  chrome.storage.local.set({ scanHistory: history });
-              });
-          }
-      });
+      // Lưu lịch sử nếu đã login
+      const historyEntry = {
+          timestamp: Date.now(),
+          mode: mode,
+          prediction: 'scam',
+          probability: 1.0,
+          details: { ham: 0, spam: 0, scam: 1.0 },
+          highlights: ['🚫 Email này nằm trong danh sách lừa đảo (Chống Lừa Đảo)'],
+          senderDomain: EdgeShield.getRootDomain(emailData.senderEmail),
+          senderEmail: emailData.senderEmail,
+          subject: emailData?.subject || '',
+      };
+      addToScanHistory(historyEntry);
       return;
   }
 
@@ -652,29 +698,20 @@ async function pollResult(job_id, edgeResult, emailData = {}) {
         };
 
         // ============================================================
-        // THÊM MỚI: LƯU LỊCH SỬ QUÉT (CHỈ KHI ĐÃ LOGIN)
+        // LƯU LỊCH SỬ QUÉT (CHỈ KHI ĐÃ LOGIN) – dùng hàm mới
         // ============================================================
-        chrome.storage.local.get(['cognitoToken'], (tokenData) => {
-            if (tokenData.cognitoToken) {
-                const historyEntry = {
-                    timestamp: Date.now(),
-                    mode: isStandard ? 'standard' : 'pro',
-                    prediction: prediction,
-                    probability: displayProb,
-                    details: syncedDetails,
-                    highlights: highlights,
-                    senderDomain: EdgeShield.getRootDomain(emailData?.senderEmail || ''),
-                    senderEmail: emailData?.senderEmail || '',
-                    subject: emailData?.subject || '',
-                };
-                chrome.storage.local.get({ scanHistory: [] }, (data) => {
-                    const history = data.scanHistory;
-                    history.push(historyEntry);
-                    if (history.length > 50) history.shift();
-                    chrome.storage.local.set({ scanHistory: history });
-                });
-            }
-        });
+        const historyEntry = {
+            timestamp: Date.now(),
+            mode: isStandard ? 'standard' : 'pro',
+            prediction: prediction,
+            probability: displayProb,
+            details: syncedDetails,
+            highlights: highlights,
+            senderDomain: EdgeShield.getRootDomain(emailData?.senderEmail || ''),
+            senderEmail: emailData?.senderEmail || '',
+            subject: emailData?.subject || '',
+        };
+        addToScanHistory(historyEntry);
 
         setState({ scanning: false, progress: null, result, error: null });
         sendResultNotification(result);
@@ -757,7 +794,7 @@ async function handleShutdown() {
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 // ============================================================
-// THÊM MỚI: ĐỒNG BỘ WHITELIST/BLACKLIST LÊN CLOUD
+// ĐỒNG BỘ WHITELIST/BLACKLIST LÊN CLOUD
 // ============================================================
 async function syncUserListsToCloud() {
     const { cognitoToken } = await chrome.storage.local.get('cognitoToken');
